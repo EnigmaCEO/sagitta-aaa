@@ -40,6 +40,90 @@ function iso(v?: string | undefined): string {
   }
 }
 
+// NEW: small UX helper to turn snake_case into readable labels
+function humanizeLabel(input: string): string {
+  const s = String(input ?? "").trim();
+  if (!s) return "";
+
+  const ACR: Record<string, string> = {
+    id: "ID",
+    usd: "USD",
+    apy: "APY",
+    tvl: "TVL",
+    ai: "AI",
+  };
+
+  // special-case common constraint prefixes
+  const SPECIAL_PREFIX: Array<[string, string]> = [
+    ["min_", "Minimum "],
+    ["max_", "Maximum "],
+  ];
+
+  for (const [prefix, repl] of SPECIAL_PREFIX) {
+    if (s.startsWith(prefix)) {
+      const rest = s.slice(prefix.length);
+      return (
+        repl +
+        rest
+          .split("_")
+          .filter(Boolean)
+          .map((w) => ACR[w.toLowerCase()] ?? (w.charAt(0).toUpperCase() + w.slice(1)))
+          .join(" ")
+      );
+    }
+  }
+
+  return s
+    .split("_")
+    .filter(Boolean)
+    .map((w) => ACR[w.toLowerCase()] ?? (w.charAt(0).toUpperCase() + w.slice(1)))
+    .join(" ");
+}
+
+// CHANGED: humanize dropdown option display text (keeps underlying value intact)
+function humanizeOption(v: unknown): string {
+  const s = String(v ?? "").trim();
+  if (!s) return "";
+
+  // handle snake_case
+  if (s.includes("_")) return humanizeLabel(s);
+
+  // normalize single-word / plain tokens ("stablecoin" -> "Stablecoin")
+  const lower = s.toLowerCase();
+  const ACR: Record<string, string> = {
+    id: "ID",
+    usd: "USD",
+    apy: "APY",
+    tvl: "TVL",
+    ai: "AI",
+  };
+  if (ACR[lower]) return ACR[lower];
+
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+// NEW: build a consistent constraint tooltip message
+function describeConstraintNumber(args: {
+  key: keyof Constraints;
+  min?: number;
+  max?: number;
+  step?: number;
+  note?: string;
+}): string {
+  const label = humanizeLabel(String(args.key));
+  const parts: string[] = [];
+
+  if (typeof args.min === "number" || typeof args.max === "number") {
+    const minS = typeof args.min === "number" ? args.min.toFixed(1) : "—";
+    const maxS = typeof args.max === "number" ? args.max.toFixed(1) : "—";
+    parts.push(`range: ${minS}–${maxS}`);
+  }
+  if (typeof args.step === "number") parts.push(`step: ${args.step}`);
+  if (args.note) parts.push(args.note);
+
+  return parts.length ? `${label} (${parts.join(", ")})` : label;
+}
+
 type RiskClass =
   | "stablecoin"
   | "large_cap_crypto"
@@ -221,6 +305,16 @@ function safeJsonParse<T>(s: string, fallback: T): T {
     return fallback;
   }
 }
+
+// NEW: tooltips for Portfolio column headers
+const PORTFOLIO_HEADER_TOOLTIPS: Record<string, string> = {
+  id: "Unique asset identifier used throughout the system (e.g., BTC, ETH).",
+  name: "Human-readable asset name.",
+  risk_class: "Risk classification used by the allocator (affects constraints/heuristics).",
+  current_weight: "Current portfolio weight as a fraction (0.00–1.00). Should sum to ~1.00 across assets.",
+  expected_return: "Expected return assumption (model input). Units depend on your convention (e.g., annual, decimal).",
+  volatility: "Volatility/risk assumption (model input). Units depend on your convention (e.g., annualized stdev, decimal).",
+};
 
 export default function Page() {
   const [scenarioId, setScenarioId] = useState<string | null>(null);
@@ -1649,12 +1743,66 @@ export default function Page() {
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
                 <tr>
-                  <th style={{ textAlign: "left", color: "#fff" }}>id</th>
-                  <th style={{ textAlign: "left", color: "#fff" }}>name</th>
-                  <th style={{ textAlign: "left", color: "#fff" }}>risk_class</th>
-                  <th style={{ textAlign: "left", color: "#fff" }}>current_weight</th>
-                  <th style={{ textAlign: "left", color: "#fff" }}>expected_return</th>
-                  <th style={{ textAlign: "left", color: "#fff" }}>volatility</th>
+                  <th style={{ textAlign: "left", color: "#fff" }}>
+                    <span
+                      className="tooltip"
+                      data-tooltip={PORTFOLIO_HEADER_TOOLTIPS["id"]}
+                      aria-label={PORTFOLIO_HEADER_TOOLTIPS["id"]}
+                      tabIndex={0}
+                    >
+                      {humanizeLabel("id")}
+                    </span>
+                  </th>
+                  <th style={{ textAlign: "left", color: "#fff" }}>
+                    <span
+                      className="tooltip"
+                      data-tooltip={PORTFOLIO_HEADER_TOOLTIPS["name"]}
+                      aria-label={PORTFOLIO_HEADER_TOOLTIPS["name"]}
+                      tabIndex={0}
+                    >
+                      {humanizeLabel("name")}
+                    </span>
+                  </th>
+                  <th style={{ textAlign: "left", color: "#fff" }}>
+                    <span
+                      className="tooltip"
+                      data-tooltip={PORTFOLIO_HEADER_TOOLTIPS["risk_class"]}
+                      aria-label={PORTFOLIO_HEADER_TOOLTIPS["risk_class"]}
+                      tabIndex={0}
+                    >
+                      {humanizeLabel("risk_class")}
+                    </span>
+                  </th>
+                  <th style={{ textAlign: "left", color: "#fff" }}>
+                    <span
+                      className="tooltip"
+                      data-tooltip={PORTFOLIO_HEADER_TOOLTIPS["current_weight"]}
+                      aria-label={PORTFOLIO_HEADER_TOOLTIPS["current_weight"]}
+                      tabIndex={0}
+                    >
+                      {humanizeLabel("current_weight")}
+                    </span>
+                  </th>
+                  <th style={{ textAlign: "left", color: "#fff" }}>
+                    <span
+                      className="tooltip"
+                      data-tooltip={PORTFOLIO_HEADER_TOOLTIPS["expected_return"]}
+                      aria-label={PORTFOLIO_HEADER_TOOLTIPS["expected_return"]}
+                      tabIndex={0}
+                    >
+                      {humanizeLabel("expected_return")}
+                    </span>
+                  </th>
+                  <th style={{ textAlign: "left", color: "#fff" }}>
+                    <span
+                      className="tooltip"
+                      data-tooltip={PORTFOLIO_HEADER_TOOLTIPS["volatility"]}
+                      aria-label={PORTFOLIO_HEADER_TOOLTIPS["volatility"]}
+                      tabIndex={0}
+                    >
+                      {humanizeLabel("volatility")}
+                    </span>
+                  </th>
                   <th style={{ textAlign: "left", color: "#fff" }} />
                 </tr>
               </thead>
@@ -1674,33 +1822,33 @@ export default function Page() {
                         value={(a.risk_class ?? "") as string}
                         onChange={(e) => onAssetChange(idx, { risk_class: (e.target.value as RiskClass) || undefined })}
                       >
-                        <option value="">(none)</option>
-                        <option value="stablecoin">stablecoin</option>
-                        <option value="large_cap_crypto">large_cap_crypto</option>
-                        <option value="defi_bluechip">defi_bluechip</option>
-                        <option value="high_risk">high_risk</option>
-                        <option value="equity_fund">equity_fund</option>
-                        <option value="fixed_income">fixed_income</option>
-                        <option value="commodities">commodities</option>
-                        <option value="real_estate">real_estate</option>
-                        <option value="cash_equivalent">cash_equivalent</option>
-                        <option value="speculative">speculative</option>
-                        <option value="traditional_asset">traditional_asset</option>
-                        <option value="alternative">alternative</option>
-                        <option value="balanced_fund">balanced_fund</option>
-                        <option value="emerging_market">emerging_market</option>
-                        <option value="frontier_market">frontier_market</option>
-                        <option value="esoteric">esoteric</option>
-                        <option value="unclassified">unclassified</option>
-                        <option value="wealth_management">wealth_management</option>
-                        <option value="fund_of_funds">fund_of_funds</option>
-                        <option value="index_fund">index_fund</option>
+                        <option value="">{humanizeOption("(none)")}</option>
+                        <option value="stablecoin">{humanizeOption("stablecoin")}</option>
+                        <option value="large_cap_crypto">{humanizeOption("large_cap_crypto")}</option>
+                        <option value="defi_bluechip">{humanizeOption("defi_bluechip")}</option>
+                        <option value="high_risk">{humanizeOption("high_risk")}</option>
+                        <option value="equity_fund">{humanizeOption("equity_fund")}</option>
+                        <option value="fixed_income">{humanizeOption("fixed_income")}</option>
+                        <option value="commodities">{humanizeOption("commodities")}</option>
+                        <option value="real_estate">{humanizeOption("real_estate")}</option>
+                        <option value="cash_equivalent">{humanizeOption("cash_equivalent")}</option>
+                        <option value="speculative">{humanizeOption("speculative")}</option>
+                        <option value="traditional_asset">{humanizeOption("traditional_asset")}</option>
+                        <option value="alternative">{humanizeOption("alternative")}</option>
+                        <option value="balanced_fund">{humanizeOption("balanced_fund")}</option>
+                        <option value="emerging_market">{humanizeOption("emerging_market")}</option>
+                        <option value="frontier_market">{humanizeOption("frontier_market")}</option>
+                        <option value="esoteric">{humanizeOption("esoteric")}</option>
+                        <option value="unclassified">{humanizeOption("unclassified")}</option>
+                        <option value="wealth_management">{humanizeOption("wealth_management")}</option>
+                        <option value="fund_of_funds">{humanizeOption("fund_of_funds")}</option>
+                        <option value="index_fund">{humanizeOption("index_fund")}</option>
                       </select>
                     </td>
                     <td>
                       <input
                         type="number"
-                        step="0.000001"
+                        step="0.01"
                         value={Number.isFinite(a.current_weight) ? a.current_weight : 0}
                         onChange={(e) => onAssetChange(idx, { current_weight: Number(e.target.value) })}
                       />
@@ -1708,7 +1856,7 @@ export default function Page() {
                     <td>
                       <input
                         type="number"
-                        step="0.000001"
+                        step="0.01"
                         value={Number.isFinite(a.expected_return) ? a.expected_return : 0}
                         onChange={(e) => onAssetChange(idx, { expected_return: Number(e.target.value) })}
                       />
@@ -1716,7 +1864,7 @@ export default function Page() {
                     <td>
                       <input
                         type="number"
-                        step="0.000001"
+                        step="0.01"
                         value={Number.isFinite(a.volatility) ? a.volatility : 0}
                         onChange={(e) => onAssetChange(idx, { volatility: Number(e.target.value) })}
                       />
@@ -1752,33 +1900,33 @@ export default function Page() {
                       value={newAssetDraft.risk_class}
                       onChange={(e) => setNewAssetDraft((s) => ({ ...s, risk_class: (e.target.value as RiskClass) || "" }))}
                     >
-                      <option value="">(none)</option>
-                      <option value="stablecoin">stablecoin</option>
-                      <option value="large_cap_crypto">large_cap_crypto</option>
-                      <option value="defi_bluechip">defi_bluechip</option>
-                      <option value="high_risk">high_risk</option>
-                      <option value="equity_fund">equity_fund</option>
-                      <option value="fixed_income">fixed_income</option>
-                      <option value="commodities">commodities</option>
-                      <option value="real_estate">real_estate</option>
-                      <option value="cash_equivalent">cash_equivalent</option>
-                      <option value="speculative">speculative</option>
-                      <option value="traditional_asset">traditional_asset</option>
-                      <option value="alternative">alternative</option>
-                      <option value="balanced_fund">balanced_fund</option>
-                      <option value="emerging_market">emerging_market</option>
-                      <option value="frontier_market">frontier_market</option>
-                      <option value="esoteric">esoteric</option>
-                      <option value="unclassified">unclassified</option>
-                      <option value="wealth_management">wealth_management</option>
-                      <option value="fund_of_funds">fund_of_funds</option>
-                      <option value="index_fund">index_fund</option>
+                      <option value="">{humanizeOption("(none)")}</option>
+                      <option value="stablecoin">{humanizeOption("stablecoin")}</option>
+                      <option value="large_cap_crypto">{humanizeOption("large_cap_crypto")}</option>
+                      <option value="defi_bluechip">{humanizeOption("defi_bluechip")}</option>
+                      <option value="high_risk">{humanizeOption("high_risk")}</option>
+                      <option value="equity_fund">{humanizeOption("equity_fund")}</option>
+                      <option value="fixed_income">{humanizeOption("fixed_income")}</option>
+                      <option value="commodities">{humanizeOption("commodities")}</option>
+                      <option value="real_estate">{humanizeOption("real_estate")}</option>
+                      <option value="cash_equivalent">{humanizeOption("cash_equivalent")}</option>
+                      <option value="speculative">{humanizeOption("speculative")}</option>
+                      <option value="traditional_asset">{humanizeOption("traditional_asset")}</option>
+                      <option value="alternative">{humanizeOption("alternative")}</option>
+                      <option value="balanced_fund">{humanizeOption("balanced_fund")}</option>
+                      <option value="emerging_market">{humanizeOption("emerging_market")}</option>
+                      <option value="frontier_market">{humanizeOption("frontier_market")}</option>
+                      <option value="esoteric">{humanizeOption("esoteric")}</option>
+                      <option value="unclassified">{humanizeOption("unclassified")}</option>
+                      <option value="wealth_management">{humanizeOption("wealth_management")}</option>
+                      <option value="fund_of_funds">{humanizeOption("fund_of_funds")}</option>
+                      <option value="index_fund">{humanizeOption("index_fund")}</option>
                     </select>
                   </td>
                   <td>
                     <input
                       type="number"
-                      step="0.000001"
+                      step="0.01"
                       value={newAssetDraft.current_weight}
                       onChange={(e) => setNewAssetDraft((s) => ({ ...s, current_weight: e.target.value }))}
                       placeholder="0.00"
@@ -1787,7 +1935,7 @@ export default function Page() {
                   <td>
                     <input
                       type="number"
-                      step="0.000001"
+                      step="0.01"
                       value={newAssetDraft.expected_return}
                       onChange={(e) => setNewAssetDraft((s) => ({ ...s, expected_return: e.target.value }))}
                       placeholder="0.00"
@@ -1796,7 +1944,7 @@ export default function Page() {
                   <td>
                     <input
                       type="number"
-                      step="0.000001"
+                      step="0.01"
                       value={newAssetDraft.volatility}
                       onChange={(e) => setNewAssetDraft((s) => ({ ...s, volatility: e.target.value }))}
                       placeholder="0.00"
@@ -1893,10 +2041,31 @@ export default function Page() {
 
               <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                 <label>
-                  min_asset_weight
+                  <span
+                    className="tooltip"
+                    data-tooltip={describeConstraintNumber({
+                      key: "min_asset_weight",
+                      min: 0.0,
+                      max: 1.0,
+                      step: 0.01,
+                      note: "Minimum allowable weight per asset (e.g., 0.01 = 1%).",
+                    })}
+                    aria-label={describeConstraintNumber({
+                      key: "min_asset_weight",
+                      min: 0.0,
+                      max: 1.0,
+                      step: 0.01,
+                      note: "Minimum allowable weight per asset (e.g., 0.01 = 1%).",
+                    })}
+                    tabIndex={0}
+                  >
+                    {humanizeLabel("min_asset_weight")}
+                  </span>
                   <input
                     type="number"
-                    step="0.0001"
+                    step="0.01"
+                    min={0}
+                    max={1}
                     value={(constraintsDraft?.min_asset_weight ?? "") as number | ""}
                     onChange={(e) => {
                       const v = e.target.value === "" ? undefined : Number(e.target.value);
@@ -1908,10 +2077,31 @@ export default function Page() {
                 </label>
 
                 <label>
-                  max_asset_weight
+                  <span
+                    className="tooltip"
+                    data-tooltip={describeConstraintNumber({
+                      key: "max_asset_weight",
+                      min: 0.0,
+                      max: 1.0,
+                      step: 0.01,
+                      note: "Maximum allowable weight per asset (e.g., 0.25 = 25%).",
+                    })}
+                    aria-label={describeConstraintNumber({
+                      key: "max_asset_weight",
+                      min: 0.0,
+                      max: 1.0,
+                      step: 0.01,
+                      note: "Maximum allowable weight per asset (e.g., 0.25 = 25%).",
+                    })}
+                    tabIndex={0}
+                  >
+                    {humanizeLabel("max_asset_weight")}
+                  </span>
                   <input
                     type="number"
-                    step="0.0001"
+                    step="0.01"
+                    min={0}
+                    max={1}
                     value={(constraintsDraft?.max_asset_weight ?? "") as number | ""}
                     onChange={(e) => {
                       const v = e.target.value === "" ? undefined : Number(e.target.value);
@@ -1923,10 +2113,31 @@ export default function Page() {
                 </label>
 
                 <label>
-                  max_concentration
+                  <span
+                    className="tooltip"
+                    data-tooltip={describeConstraintNumber({
+                      key: "max_concentration",
+                      min: 0.0,
+                      max: 1.0,
+                      step: 0.01,
+                      note: "Max concentration limit used to block overly concentrated allocations.",
+                    })}
+                    aria-label={describeConstraintNumber({
+                      key: "max_concentration",
+                      min: 0.0,
+                      max: 1.0,
+                      step: 0.01,
+                      note: "Max concentration limit used to block overly concentrated allocations.",
+                    })}
+                    tabIndex={0}
+                  >
+                    {humanizeLabel("max_concentration")}
+                  </span>
                   <input
                     type="number"
-                    step="0.0001"
+                    step="0.01"
+                    min={0}
+                    max={1}
                     value={(constraintsDraft?.max_concentration ?? "") as number | ""}
                     onChange={(e) => {
                       const v = e.target.value === "" ? undefined : Number(e.target.value);
@@ -1978,7 +2189,14 @@ export default function Page() {
                         title={f.description}
                         style={{ display: "flex", flexDirection: "column", gap: 6 }}
                       >
-                        <span>{f.label}</span>
+                        <span
+                          className="tooltip"
+                          data-tooltip={f.description || ""}
+                          aria-label={f.description || ""}
+                          tabIndex={0}
+                        >
+                          {f.label}
+                        </span>
                         <select
                           value={String(safe ?? "")}
                           onChange={(e) => {
@@ -1989,10 +2207,11 @@ export default function Page() {
                         >
                           {(f.options ?? []).map((opt) => (
                             <option key={opt} value={opt}>
-                              {opt}
+                              {humanizeOption(opt)}
                             </option>
                           ))}
                         </select>
+                        {/* optional: you can remove the small description if tooltip is enough */}
                         <small style={{ color: "#666" }}>{f.description}</small>
                       </label>
                     );
@@ -2006,7 +2225,14 @@ export default function Page() {
                         title={f.description}
                         style={{ display: "flex", flexDirection: "column", gap: 6 }}
                       >
-                        <span>{f.label}</span>
+                        <span
+                          className="tooltip"
+                          data-tooltip={f.description || ""}
+                          aria-label={f.description || ""}
+                          tabIndex={0}
+                        >
+                          {f.label}
+                        </span>
                         <input
                           type="number"
                           step={typeof f.step === "number" ? f.step : "any"}
@@ -2030,7 +2256,14 @@ export default function Page() {
                         title={f.description}
                         style={{ display: "flex", flexDirection: "column", gap: 6 }}
                       >
-                        <span>{f.label}</span>
+                        <span
+                          className="tooltip"
+                          data-tooltip={f.description || ""}
+                          aria-label={f.description || ""}
+                          tabIndex={0}
+                        >
+                          {f.label}
+                        </span>
                         <input
                           type="checkbox"
                           checked={checked}
@@ -2057,7 +2290,14 @@ export default function Page() {
                           gridColumn: "1 / -1", // JSON spans both columns
                         }}
                       >
-                        <span>{f.label}</span>
+                        <span
+                          className="tooltip"
+                          data-tooltip={f.description || ""}
+                          aria-label={f.description || ""}
+                          tabIndex={0}
+                        >
+                          {f.label}
+                        </span>
                         <textarea
                           rows={6}
                           value={jsonText}
@@ -2282,11 +2522,11 @@ export default function Page() {
                     <table style={{ width: "100%", borderCollapse: "collapse" }}>
                       <thead>
                         <tr>
-                          <th style={{ textAlign: "left", color: "#fff" }}>timestamp</th>
-                          <th style={{ textAlign: "left", color: "#fff" }}>portfolio</th>
-                          <th style={{ textAlign: "left", color: "#fff" }}>policy</th>
-                          <th style={{ textAlign: "left", color: "#fff" }}>summary</th>
-                          <th style={{ textAlign: "right", color: "#fff" }}>actions</th>
+                          <th style={{ textAlign: "left", color: "#fff" }}>Timestamp</th>
+                          <th style={{ textAlign: "left", color: "#fff" }}>Portfolio</th>
+                          <th style={{ textAlign: "left", color: "#fff" }}>Policy</th>
+                          <th style={{ textAlign: "left", color: "#fff" }}>Summary</th>
+                          <th style={{ textAlign: "right", color: "#fff" }}>Actions</th>
                         </tr>
                       </thead>
 
@@ -2306,10 +2546,10 @@ export default function Page() {
                                 <td>
                                   {tw ? (
                                     <span>
-                                      target_weights: {Object.keys(tw).length} assets • turnover {(turnover * 100).toFixed(2)}%
+                                      {humanizeLabel("target_weights")}: {Object.keys(tw).length} assets • turnover {(turnover * 100).toFixed(2)}%
                                     </span>
                                   ) : (
-                                    <span style={{ color: "#666" }}>No target_weights in payload</span>
+                                    <span style={{ color: "#666" }}>No {humanizeLabel("target_weights")} in payload</span>
                                   )}
                                 </td>
                                 <td style={{ whiteSpace: "nowrap", textAlign: "right" }}>
@@ -2353,11 +2593,11 @@ export default function Page() {
                                         <table style={{ width: "100%", borderCollapse: "collapse" }}>
                                           <thead>
                                             <tr>
-                                              <th style={{ textAlign: "left", color: "#fff" }}>asset</th>
-                                              <th style={{ textAlign: "right", color: "#fff" }}>current</th>
-                                              <th style={{ textAlign: "right", color: "#fff" }}>target</th>
+                                              <th style={{ textAlign: "left", color: "#fff" }}>Asset</th>
+                                              <th style={{ textAlign: "right", color: "#fff" }}>Current</th>
+                                              <th style={{ textAlign: "right", color: "#fff" }}>Target</th>
                                               <th style={{ textAlign: "right", color: "#fff" }}>Δ</th>
-                                              <th style={{ textAlign: "left", color: "#fff" }}>visual</th>
+                                              <th style={{ textAlign: "left", color: "#fff" }}>Visual</th>
                                             </tr>
                                           </thead>
                                           <tbody>

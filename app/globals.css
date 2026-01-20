@@ -1,6 +1,6 @@
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #000000;
+  --foreground: #ededed;
 }
 
 @theme inline {
@@ -8,13 +8,6 @@
   --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #000000;
-    --foreground: #ededed;
-  }
 }
 
 body {
@@ -59,4 +52,48 @@ textarea {
 
 th {
   color: #ffffff;
+}
+
+/* NEW: lightweight tooltip (use on any element with class="tooltip" and data-tooltip="...") */
+.tooltip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: help;
+  border-bottom: 1px dotted rgba(255, 255, 255, 0.35);
+}
+
+.tooltip::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  left: 0;
+  top: calc(100% + 8px);
+  z-index: 9999;
+  min-width: 220px;
+  max-width: 420px;
+  padding: 10px 12px;
+  border-radius: 10px;
+
+  background: rgba(16, 16, 16, 0.98);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: #ededed;
+
+  font-size: 12px;
+  line-height: 1.35;
+
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.55);
+  white-space: pre-wrap;
+
+  opacity: 0;
+  transform: translateY(-2px);
+  pointer-events: none;
+  transition: opacity 120ms ease, transform 120ms ease;
+}
+
+.tooltip:hover::after,
+.tooltip:focus::after,
+.tooltip:focus-within::after {
+  opacity: 1;
+  transform: translateY(0);
 }
