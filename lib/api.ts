@@ -2,20 +2,7 @@
 // 1) Use NEXT_PUBLIC_API_BASE_URL if provided (explicit override)
 // 2) If running in browser and page is served from NEXT dev (port 3000), assume backend at http://localhost:8000
 // 3) Otherwise use window.location.origin (same-origin) or fallback to localhost:8000
-const ENV_BASE = typeof process !== "undefined" ? process.env.NEXT_PUBLIC_API_BASE_URL : undefined;
-let BASE: string;
-if (ENV_BASE && ENV_BASE.length > 0) {
-  BASE = ENV_BASE;
-} else if (typeof window !== "undefined") {
-  // Next.js dev server commonly runs on :3000; backend runs on :8000
-  if (window.location.port === "3000") {
-    BASE = "http://localhost:8000";
-  } else {
-    BASE = window.location.origin;
-  }
-} else {
-  BASE = "http://localhost:8000";
-}
+const BASE = typeof window !== "undefined" ? "/api/aaa" : (process.env.AAA_API_BASE_URL || "http://localhost:8000");
 
 async function req(path: string, opts: RequestInit = {}) {
   const url = `${BASE}${path}`;

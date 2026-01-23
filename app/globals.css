@@ -1,3 +1,8 @@
+/* Add Tailwind directives at the top if Tailwind is being used */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
 :root {
   --background: #000000;
   --foreground: #ededed;
@@ -96,4 +101,8 @@ th {
 .tooltip:focus-within::after {
   opacity: 1;
   transform: translateY(0);
+}
+
+a {
+  text-decoration: none;
 }
