@@ -296,30 +296,34 @@ const TIERS = [
     title: "Observer Access",
     meta: "Allocator v1",
     price: "Free",
-    copy: "Read-only access to demos, preset policies, and cached scenario results.",
-    bullets: ["Demo portfolios", "Preset policies", "Cached scenario results"],
-    cta: { label: "Sign In", href: "/auth/login" },
+    copy: "Observe real allocation decisions generated under policy constraints. Decisions are deterministic, non-custodial, and fully auditable.",
+    bullets: ["Policy-driven allocation outcomes", "Portfolio risk, churn, and weighting insights", "Side-by-side A/B policy comparisons",
+        "Multi-tick simulation results"
+    ],
+    cta: { label: "View System", href: "/auth/login" },
     icon: "eye" as IconName,
-    primary: true,
   },
   {
     title: "Sandbox Authority",
     meta: "Allocator v1-v2",
     price: "$79/month",
     copy:
-      "Build policies and run scenario simulations. Intended for DAO analysts and DeFi PMs validating mandates.",
-    bullets: ["Policy drafting", "Scenario simulation", "Mandate validation"],
-    cta: { label: "Sign in", href: "/auth/login" },
+      "Designed for anyone who wants to reason about allocation the way institutions do — with explicit rules, repeatable outcomes, and audit-grade clarity",
+    bullets: ["Policy creation with enforceable constraints", "Regime-aware scenario simulation", "Persistant decision logs for audit and review"
+        ,"Wallet-native and custom portfolio imports"
+    ],
+    cta: { label: "Start Sandbox", href: "/auth/login" },
     icon: "flask" as IconName,
   },
   {
     title: "Production Authority",
     meta: "Allocator v2-v3",
-    price: "Contact",
+    price: "$499/month",
     copy:
-      "Operational decision workflows with accountability controls and expanded risk guards. Qualification required.",
-    bullets: ["Operational decision workflows", "Accountability controls", "Expanded risk guards"],
-    cta: { label: "Contact", href: "mailto:contact@sagitta.ai" },
+      "Execute allocation decisions within controlled operational workflows designed for accountability, review, and institutional risk tolerance. This tier enables team-based access and the v3 governance allocator.",
+    bullets: ["Team-based access with role controls", "Real-time Agent mode workflows", 
+        "Enforced policy and risk guardrails", "Version controlled portfolio and policy updates"],
+    cta: { label: "Request Access", href: "mailto:sales@sagitta.systems" },
     icon: "key" as IconName,
   },
   {
@@ -327,11 +331,12 @@ const TIERS = [
     meta: "Allocator v4-v6",
     price: "Enterprise",
     copy:
-      "Autonomous operation under explicit doctrine with formal governance constraints and continuity hooks. Institutional controls.",
+      "Autonomous operation under explicit doctrine with formal governance constraints, continuity enforcement, and system-level survivability guarantees. Intended for environments where decision continuity is a system requirement, not an operational preference.",
     bullets: [
-      "Autonomous operation under explicit doctrine",
-      "Continuity and governance hooks",
-      "Institutional controls",
+      "Doctrine-bound autonomous execution",
+      "Autonomous enforcement",
+      "Custom SLA and support packages",
+      "On-prem or sovereign-controlled deployment options"
     ],
     cta: { label: "Request access", href: "mailto:contact@sagitta.ai" },
     icon: "crown" as IconName,
@@ -656,7 +661,7 @@ export default function MarketingPageClient() {
                   View pricing
                 </a>
                 <a href="#pricing" className="cta-outline focus-ring cta-btn" style={{ color: "#e6edf3" }}>
-                  Sign In
+                  View System
                 </a>
               </div>
             </div>
@@ -820,11 +825,12 @@ export default function MarketingPageClient() {
                       </div>
                     ))}
                   </div>
+                  <div style={{ marginTop: 20, display: "grid", gap: 10 }}></div>
                   {tier.cta.href.startsWith("mailto") ? (
                     <a
                       href={tier.cta.href}
-                      className={`focus-ring cta-btn ${tier.primary ? "btn-primary" : "cta-outline"}`}
-                      style={{ marginTop: 20, textAlign: "center" }}
+                      className={`focus-ring cta-btn cta-outline`}
+                      style={{ marginTop: "auto", textAlign: "center", color: "#ededed" }}
                     >
                       {tier.cta.label}
                     </a>
@@ -832,8 +838,8 @@ export default function MarketingPageClient() {
                     <Link
                       href={tier.cta.href}
                       prefetch={false}
-                      className={`focus-ring cta-btn ${tier.primary ? "btn-primary" : "cta-outline"}`}
-                      style={{ marginTop: 20, textAlign: "center" }}
+                      className={`focus-ring cta-btn cta-outline`}
+                      style={{ marginTop: "auto", textAlign: "center", color: "#ededed"  }}
                     >
                       {tier.cta.label}
                     </Link>
