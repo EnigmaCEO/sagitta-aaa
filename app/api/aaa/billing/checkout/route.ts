@@ -1,58 +1,58 @@
-// app/api/aaa/me/route.ts
+// app/api/aaa/billing/checkout/route.ts
 import { NextResponse } from "next/server";
 import { auth0 } from "@/lib/auth0";
 
 export const runtime = "nodejs";
 
-function guestMe() {
-  return NextResponse.json({
-    ok: true,
-    auth: "guest",
-    authority_level: 0,
-    scopes: [],
-    roles: [],
-    token_scopes: [],
-  });
-}
-
-export async function GET(request: Request) {
-  console.log("API AAA /me called");
-  console.log("Request URL:", request.url);
-
+export async function POST(request: Request) {
   const base = process.env.AAA_API_BASE_URL;
-  console.log("AAA_API_BASE_URL:", base ? "present" : "absent");
   if (!base) {
-    return NextResponse.json({ error: "Missing AAA_API_BASE_URL env var" }, { status: 500 });
+    return NextResponse.json(
+      { error: "Missing AAA_API_BASE_URL env var" },
+      { status: 500 }
+    );
   }
 
-  // Try to get token from the request context if possible (safer in App Router)
+  // Auth: require logged-in user
   const accessToken = await auth0.getAccessTokenString().catch(() => undefined);
-
-  console.log("Access token:", accessToken ? "present" : "absent");
-  // ✅ Guest path: no session / no token is not an error
   if (!accessToken) {
-    return guestMe();
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const target = `${base.replace(/\/+$/, "")}/me`;
+  // Expect JSON body: { plan_key: "sandbox" | "production" | ... }
+  let body: unknown = null;
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
+
+  // Narrow the parsed body to a record so we can safely index into it
+  const parsed = body as Record<string, unknown> | null;
+  const plan_key = typeof parsed?.["plan_key"] === "string" ? (parsed["plan_key"] as string) : "";
+  if (!plan_key) {
+    return NextResponse.json(
+      { error: "Missing plan_key (expected { plan_key: string })" },
+      { status: 400 }
+    );
+  }
+
+  const target = `${base.replace(/\/+$/, "")}/billing/checkout`;
 
   try {
     const upstream = await fetch(target, {
-      method: "GET",
+      method: "POST",
       headers: {
         Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
         Accept: "application/json",
       },
+      body: JSON.stringify({ plan_key }),
       cache: "no-store",
     });
 
     const contentType = upstream.headers.get("content-type") ?? "";
     const status = upstream.status;
-    console.log(`Upstream response: ${status} (${contentType})`);
-    // Optional: if upstream says unauthorized, treat as guest instead of bubbling 401
-    if (status === 401 || status === 403) {
-      return guestMe();
-    }
 
     if (contentType.includes("application/json")) {
       const json = await upstream.json();

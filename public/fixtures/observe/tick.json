@@ -1,0 +1,406 @@
+{
+    "target_weights": {
+        "SPC": 0.253888414637141,
+        "USDC": 0.22005658587967256,
+        "SKY": 0.16287181337811077,
+        "GFI": 0.12275265361261711,
+        "DOT": 0.0476190476475616,
+        "SYRUP": 0.19281148484489702
+    },
+    "next_allocation_weights": {
+        "SPC": 0.253888414637141,
+        "USDC": 0.22005658587967256,
+        "SKY": 0.16287181337811077,
+        "GFI": 0.12275265361261711,
+        "DOT": 0.0476190476475616,
+        "SYRUP": 0.19281148484489702
+    },
+    "score_trace_by_asset": {
+        "SPC": {
+            "current_weight_used": 0.8,
+            "score_v1": 0.15800000000000003,
+            "role": "core",
+            "er_mult": 0.95,
+            "vol_mult": 0.9,
+            "churn_penalty_mult": 1.35,
+            "expected_return_used_raw": 0.28,
+            "volatility_used_raw": 0.24,
+            "expected_return_used_role_adj": 0.266,
+            "volatility_used_role_adj": 0.216,
+            "score_base": 0.16000000000000003,
+            "score_role_delta": -0.0020000000000000018,
+            "score_posture_delta": 0.0,
+            "score_final": 0.15800000000000003,
+            "role_bias_mult": 1.0,
+            "posture_bias_mult": 1.0,
+            "score_shift": 0.266000001,
+            "role_floor_value": 0.1,
+            "role_floor_applied": false,
+            "weight_final": 0.253888414637141
+        },
+        "USDC": {
+            "current_weight_used": 0.05,
+            "score_v1": 0.1015,
+            "role": "liquidity",
+            "er_mult": 0.85,
+            "vol_mult": 0.5,
+            "churn_penalty_mult": 0.85,
+            "expected_return_used_raw": 0.14,
+            "volatility_used_raw": 0.07,
+            "expected_return_used_role_adj": 0.11900000000000001,
+            "volatility_used_role_adj": 0.035,
+            "score_base": 0.10500000000000001,
+            "score_role_delta": -0.003500000000000003,
+            "score_posture_delta": 0.0,
+            "score_final": 0.1015,
+            "role_bias_mult": 1.0,
+            "posture_bias_mult": 1.0,
+            "score_shift": 0.266000001,
+            "role_floor_value": 0.05,
+            "role_floor_applied": false,
+            "weight_final": 0.22005658587967256
+        },
+        "SKY": {
+            "current_weight_used": 0.03,
+            "score_v1": 0.006000000000000005,
+            "role": "satellite",
+            "er_mult": 1.0,
+            "vol_mult": 1.0,
+            "churn_penalty_mult": 1.0,
+            "expected_return_used_raw": 0.156,
+            "volatility_used_raw": 0.3,
+            "expected_return_used_role_adj": 0.156,
+            "volatility_used_role_adj": 0.3,
+            "score_base": 0.006000000000000005,
+            "score_role_delta": 0.0,
+            "score_posture_delta": 0.0,
+            "score_final": 0.006000000000000005,
+            "role_bias_mult": 1.0,
+            "posture_bias_mult": 1.0,
+            "score_shift": 0.266000001,
+            "weight_final": 0.16287181337811077
+        },
+        "GFI": {
+            "current_weight_used": 0.02,
+            "score_v1": -0.061000000000000026,
+            "role": "defensive",
+            "er_mult": 0.9,
+            "vol_mult": 0.8,
+            "churn_penalty_mult": 1.25,
+            "expected_return_used_raw": 0.11,
+            "volatility_used_raw": 0.4,
+            "expected_return_used_role_adj": 0.099,
+            "volatility_used_role_adj": 0.32000000000000006,
+            "score_base": -0.09000000000000001,
+            "score_role_delta": 0.028999999999999984,
+            "score_posture_delta": 0.0,
+            "score_final": -0.061000000000000026,
+            "role_bias_mult": 1.0,
+            "posture_bias_mult": 1.0,
+            "score_shift": 0.266000001,
+            "role_floor_value": 0.02,
+            "role_floor_applied": false,
+            "weight_final": 0.12275265361261711
+        },
+        "DOT": {
+            "current_weight_used": 0.05,
+            "score_v1": -0.26599999999999996,
+            "role": "speculative",
+            "er_mult": 1.1,
+            "vol_mult": 1.2,
+            "churn_penalty_mult": 0.9,
+            "expected_return_used_raw": 0.14,
+            "volatility_used_raw": 0.7,
+            "expected_return_used_role_adj": 0.15400000000000003,
+            "volatility_used_role_adj": 0.84,
+            "score_base": -0.20999999999999996,
+            "score_role_delta": -0.055999999999999994,
+            "score_posture_delta": 0.0,
+            "score_final": -0.26599999999999996,
+            "role_bias_mult": 1.0,
+            "posture_bias_mult": 1.0,
+            "score_shift": 0.266000001,
+            "cap_min": 0.05,
+            "cap_max": 0.6,
+            "weight_pre_cap": 6.287331175459422e-10,
+            "weight_post_cap": 0.05,
+            "weight_final": 0.0476190476475616
+        },
+        "SYRUP": {
+            "current_weight_used": 0.05,
+            "score_v1": 0.055999999999999994,
+            "role": "satellite",
+            "er_mult": 1.0,
+            "vol_mult": 1.0,
+            "churn_penalty_mult": 1.0,
+            "expected_return_used_raw": 0.156,
+            "volatility_used_raw": 0.2,
+            "expected_return_used_role_adj": 0.156,
+            "volatility_used_role_adj": 0.2,
+            "score_base": 0.055999999999999994,
+            "score_role_delta": 0.0,
+            "score_posture_delta": 0.0,
+            "score_final": 0.055999999999999994,
+            "role_bias_mult": 1.0,
+            "posture_bias_mult": 1.0,
+            "score_shift": 0.266000001,
+            "weight_final": 0.19281148484489702
+        }
+    },
+    "meta": {
+        "allocator": "protocol_deterministic",
+        "status": "OK",
+        "reason_code": "WEIGHTS_COMPUTED_RULES_BASED",
+        "reason_codes": [
+            "WEIGHTS_COMPUTED_RULES_BASED",
+            "SCORE_SHIFT_APPLIED",
+            "MIN_MAX_CAPS_APPLIED",
+            "ROLE_MODIFIERS_APPLIED"
+        ],
+        "role_policy": {
+            "core_floor": 0.1,
+            "speculative_cap_conservative": 0.1,
+            "liquidity_conservative_score_mult": 1.1,
+            "liquidity_cap_boost": 1.2,
+            "dominance_gap": 0.01
+        },
+        "role_constraints_summary": [
+            "Role modifiers adjusted expected return/volatility inputs."
+        ],
+        "constraints": {
+            "min_asset_weight": 0.05,
+            "max_asset_weight": 0.6,
+            "max_concentration": 0.7
+        },
+        "assets_sanitized": {
+            "assets_in": 6,
+            "assets_out": 6,
+            "dropped_count": 0,
+            "duplicate_ids_count": 0,
+            "duplicate_ids": [],
+            "invalid_role_count": 0,
+            "invalid_role_ids": []
+        },
+        "regime_used": null,
+        "allocator_version_requested": "v1",
+        "allocator_version_effective": "v1",
+        "supported_versions": [
+            "v1",
+            "v2",
+            "v3",
+            "v4",
+            "v5",
+            "v6"
+        ],
+        "allow_fallback": true,
+        "allowed_allocator_versions": [
+            "v1",
+            "v2",
+            "v3",
+            "v4",
+            "v5",
+            "v6"
+        ]
+    },
+    "timestamp": "2026-01-27T21:24:27.991307+00:00",
+    "tick_id": "tick1",
+    "schema_version": "tick_v1",
+    "decision_type": "allocation",
+    "allocator_version": "v1",
+    "policy_id": "unknown",
+    "policy_name": "unknown",
+    "analysis_meta": {
+        "allocator_version": "v1",
+        "analyzer_version": "analysis_v1",
+        "policy_id": "unknown",
+        "policy_name": "unknown"
+    },
+    "prior_tick_id": null,
+    "prior_target_weights": null,
+    "prior_source": "portfolio_snapshot",
+    "prior_portfolio_weights": {
+        "SPC": 0.8,
+        "USDC": 0.05,
+        "SKY": 0.03,
+        "GFI": 0.02,
+        "DOT": 0.05,
+        "SYRUP": 0.05
+    },
+    "policy_snapshot": {
+        "decision_type": "allocation",
+        "policy_id": null,
+        "policy_name": null,
+        "allocator_version_requested": "v1",
+        "allocator_version_effective": "v1",
+        "mission": "risk_adjusted_return",
+        "risk_posture": "neutral",
+        "confidence_level": "normal",
+        "liquidity_state": "normal",
+        "correlation_state": "normal",
+        "constraints": {
+            "min_asset_weight": 0.05,
+            "max_asset_weight": 0.6,
+            "max_concentration": 0.7
+        }
+    },
+    "risk_summary": {
+        "pre": {
+            "portfolio_volatility": 0.19582198548681914
+        },
+        "post": {
+            "portfolio_volatility": 0.1065207295948896
+        },
+        "delta": {
+            "portfolio_volatility": -0.08930125589192954
+        }
+    },
+    "stability_metrics": {
+        "turnover_l1": 0.5484925377152975,
+        "churn_pct": 54.849253771529746,
+        "max_asset_shift": {
+            "asset": "SPC",
+            "delta": 0.5461115853628591
+        },
+        "notes": []
+    },
+    "pruning_summary": {
+        "pruned_assets": [],
+        "pruned_count": 0,
+        "role_floor_assets": [],
+        "role_floor_count": 0
+    },
+    "role_by_asset": {
+        "SPC": "core",
+        "USDC": "liquidity",
+        "SKY": "satellite",
+        "GFI": "defensive",
+        "DOT": "speculative",
+        "SYRUP": "satellite"
+    },
+    "role_policy": {
+        "core_floor": 0.1,
+        "speculative_cap_conservative": 0.1,
+        "liquidity_conservative_score_mult": 1.1,
+        "liquidity_cap_boost": 1.2,
+        "dominance_gap": 0.01
+    },
+    "per_asset_score_trace": {
+        "SPC": {
+            "base_score": 0.16000000000000003,
+            "role_delta": -0.0020000000000000018,
+            "posture_delta": 0.0,
+            "final_score": 0.15800000000000003
+        },
+        "USDC": {
+            "base_score": 0.10500000000000001,
+            "role_delta": -0.003500000000000003,
+            "posture_delta": 0.0,
+            "final_score": 0.1015
+        },
+        "SKY": {
+            "base_score": 0.006000000000000005,
+            "role_delta": 0.0,
+            "posture_delta": 0.0,
+            "final_score": 0.006000000000000005
+        },
+        "GFI": {
+            "base_score": -0.09000000000000001,
+            "role_delta": 0.028999999999999984,
+            "posture_delta": 0.0,
+            "final_score": -0.061000000000000026
+        },
+        "DOT": {
+            "base_score": -0.20999999999999996,
+            "role_delta": -0.055999999999999994,
+            "posture_delta": 0.0,
+            "final_score": -0.26599999999999996
+        },
+        "SYRUP": {
+            "base_score": 0.055999999999999994,
+            "role_delta": 0.0,
+            "posture_delta": 0.0,
+            "final_score": 0.055999999999999994
+        }
+    },
+    "pruning_trace": {},
+    "role_constraints_summary": [
+        "Role modifiers adjusted expected return/volatility inputs."
+    ],
+    "analysis_summary": {
+        "risk_delta": -0.08930125589192954,
+        "churn_pct": 54.849253771529746,
+        "turnover_l1": 0.5484925377152975,
+        "max_shift_asset": "SPC",
+        "max_shift_delta": 0.5461115853628591,
+        "assets_count": 6,
+        "assets_changed_count": 6,
+        "eps_used": 1e-06,
+        "prior_source": "portfolio_snapshot",
+        "notes": [],
+        "version": "analysis_v1"
+    },
+    "policy_effects": {
+        "allocator_version": "v1",
+        "mission": "risk_adjusted_return",
+        "risk_posture": "neutral",
+        "confidence_level": "normal",
+        "liquidity_state": "normal",
+        "correlation_state": "normal",
+        "applied_effects": {
+            "expected_return_multiplier": 1.0,
+            "volatility_multiplier": 1.0,
+            "correlation_penalty_applied": false,
+            "liquidity_penalty_applied": false,
+            "risk_budget_multiplier": 1.0
+        },
+        "notes": [
+            "Confidence level did not scale expected returns (confidence_level=normal).",
+            "Correlation tightening not applied (correlation_state=normal).",
+            "Liquidity penalty not applied (liquidity_state=normal).",
+            "Volatility scaling exponent not reported for allocator v1.",
+            "Risk budget multiplier not used in allocation mode."
+        ]
+    },
+    "policy_sensitivity": {
+        "equivalent": true,
+        "binding_factors": [],
+        "inactive_factors": [
+            "confidence_level",
+            "correlation_state",
+            "liquidity_state",
+            "risk_posture",
+            "mission",
+            "constraints"
+        ],
+        "ranking_changed": false,
+        "pruning_changed": false,
+        "constraint_binding_changed": false,
+        "normalization_dominated": false,
+        "weight_delta_l1_vs_baseline": 0.0,
+        "max_weight_delta_vs_baseline": 0.0,
+        "divergence_conditions": [
+            "confidence_level must be 'low' or 'high' to scale expected returns (current=normal)",
+            "correlation_state must be 'high' or 'crisis' to tighten correlations (current=normal)",
+            "liquidity_state must be 'tight' or 'frozen' to apply liquidity penalty (current=normal)",
+            "max_asset_weight binds when any weight >= 0.6000 (current_max=0.2539)",
+            "max_concentration binds when any weight >= 0.7000 (current_max=0.2539)",
+            "ranking changes when score spread between SPC and USDC crosses 0 (current_spread=0.0565)",
+            "pruning requires weight <= 0.000001 (current_min=0.047619)"
+        ],
+        "equivalence_class": "policy_equivalent_under_constraints"
+    },
+    "policy_equivalence": {
+        "equivalent": true,
+        "reason": "Identical asset ranking and constraint bindings produced the same normalized allocation.",
+        "compared_policies": [
+            "unsaved",
+            "baseline_neutral"
+        ]
+    },
+    "linkage_scope": {
+        "account_id": "observe",
+        "decision_type": "allocation",
+        "portfolio_fingerprint": "57f29f15c0ab920447c6d7e87b495dd2c243282ea0eeace8212d7abf9678095b",
+        "policy_fingerprint": "bc2c076d65a38d1115d82fa098cb37aa4fd5975807f60f729b08797e55cac9d7"
+    }
+}

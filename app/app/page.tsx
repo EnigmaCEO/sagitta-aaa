@@ -2,9 +2,16 @@
 
 import React, { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import Image from "next/image";
+
 import {
+  listScenarios,
   createScenario,
   getScenario,
+  getScenarioSession,
+  setScenarioActive,
+  listPolicies,
+  getPolicy,
+  upsertPolicy,
   putPortfolio,
   putConstraints,
   putAllocatorVersion,
@@ -23,6 +30,18 @@ import {
   putRegime,
   explainTick,
   previewPortfolioImport,
+  postStripe,
+  listPortfolios,
+  getPortfolio,
+  upsertPortfolio,
+  listScenarioDecisionRuns,
+  getDecisionRun,
+  createDecisionRun,
+  type ScenarioSummary,
+  type ScenarioDetail,
+  type SavedPolicyRow,
+  type DecisionRunRow,
+  type DecisionRun,
 } from "../../lib/api";
 
 import { useDebouncedAutosave } from "../../lib/hooks";
@@ -50,6 +69,12 @@ function iso(v?: string | undefined): string {
     return "";
   }
 }
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function isUuid(value: string): boolean {
+  return UUID_RE.test(String(value || "").trim());
+}
+const OBSERVE_SCENARIO_ID = "observe";
 
 // NEW: small UX helper to turn snake_case into readable labels
 function humanizeLabel(input: string): string {
@@ -534,21 +559,47 @@ type AbResult = {
   };
 };
 
-const POLICY_STORAGE_KEY = "sagitta.aaa.v0.0.1.policies";
-const POLICY_SELECTED_KEY = "sagitta.aaa.v0.0.1.selectedPolicyId";
+type PolicyPayload = {
+  decisionType: DecisionType;
+  allocatorVersion: AllocatorVersion;
+  constraints: Constraints;
+  regime: Record<string, unknown>;
+};
+
+type SavedPolicy = {
+  id: string;
+  name: string;
+  updatedAt: string;
+  policy: PolicyPayload;
+};
+
 const SHOW_DEV_PAYLOAD_PREVIEW = false;
 const EM_DASH = "\u2014";
 
-function makePolicyId(nowIso: string) {
-  return `policy_${nowIso}`;
+function coercePolicyPayload(raw: unknown): PolicyPayload {
+  const obj = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+  const decisionType =
+    typeof obj["decisionType"] === "string" ? (obj["decisionType"] as DecisionType) : "treasury_batch_allocation";
+  const allocatorVersion =
+    typeof obj["allocatorVersion"] === "string" ? (obj["allocatorVersion"] as AllocatorVersion) : "default";
+  const constraints = typeof obj["constraints"] === "object" && obj["constraints"] ? (obj["constraints"] as Constraints) : {};
+  const regime = typeof obj["regime"] === "object" && obj["regime"] ? (obj["regime"] as Record<string, unknown>) : {};
+  return { decisionType, allocatorVersion, constraints, regime };
 }
 
-function safeJsonParse<T>(s: string, fallback: T): T {
-  try {
-    return JSON.parse(s) as T;
-  } catch {
-    return fallback;
-  }
+function savedPolicyToAllocationPolicy(saved: SavedPolicy): AllocationPolicy {
+  const payload = coercePolicyPayload(saved.policy);
+  const updatedAt = saved.updatedAt || new Date().toISOString();
+  return {
+    id: saved.id,
+    name: saved.name,
+    createdAt: updatedAt,
+    updatedAt,
+    decisionType: payload.decisionType,
+    allocatorVersion: payload.allocatorVersion,
+    constraints: payload.constraints,
+    regime: payload.regime,
+  };
 }
 
 // NEW: tooltips for Portfolio column headers
@@ -594,7 +645,13 @@ const RISK_CLASS_OPTIONS: string[] = [
 export default function Page() {
   const [scenarioId, setScenarioId] = useState<string | null>(null);
   const [scenario, setScenario] = useState<Scenario | null>(null);
+  const [scenarios, setScenarios] = useState<ScenarioSummary[]>([]);
+  const [scenariosLoaded, setScenariosLoaded] = useState<boolean>(false);
+  const [scenarioActivePortfolioId, setScenarioActivePortfolioId] = useState<string | null>(null);
+  const [scenarioActivePolicyId, setScenarioActivePolicyId] = useState<string | null>(null);
   const [ticks, setTicks] = useState<Tick[]>([]);
+  const [savedDecisionTicks, setSavedDecisionTicks] = useState<Tick[]>([]);
+  const [savedDecisionRunsLoaded, setSavedDecisionRunsLoaded] = useState<boolean>(false);
   const [loading, setLoading] = useState<boolean>(false);
   const [message, setMessage] = useState<string | null>(null);
   const [selectedTickJson, setSelectedTickJson] = useState<string | null>(null);
@@ -652,6 +709,71 @@ export default function Page() {
   useEffect(() => {
     constraintsDraftRef.current = constraintsDraft;
   }, [constraintsDraft]);
+
+  // NEW: fetch /api/aaa/me to trigger server-side auth + sqlite upsert and surface the result in the UI.
+  type MeInfo = {
+    ok?: boolean;
+    auth?: "guest" | "user";
+    sub?: string;
+    authority_level?: number;
+    roles?: string[];
+    scopes?: string[];
+  } & Record<string, unknown>;
+  
+  const [meInfo, setMeInfo] = useState<MeInfo | null>(null);
+  const [meError, setMeError] = useState<string | null>(null);
+  const [meLoaded, setMeLoaded] = useState(false);
+
+  
+  const authorityLevel = meInfo ? Number(meInfo.authority_level ?? 0) : null;
+  const canWrite = authorityLevel !== null && authorityLevel >= 1;
+  const isObserver = authorityLevel !== null && authorityLevel < 1;
+  
+  useEffect(() => {
+    (async () => {
+      try {
+        const resp = await fetch("/api/aaa/me", {
+          method: "GET",
+          cache: "no-store",
+          credentials: "include",
+          headers: { Accept: "application/json", "X-Client-Origin": "browser" },
+        });
+  
+        // If your /me already returns guest JSON on no session, this is mostly redundant.
+        if (!resp.ok) {
+          if (resp.status === 403) {
+            if (typeof window !== "undefined") window.location.assign("/auth/logout");
+            return;
+          }
+          if (resp.status === 401) {
+            const guest: MeInfo = { ok: true, auth: "guest", authority_level: 0 };
+            setMeInfo(guest);
+            setMeError(null);
+            setMeLoaded(true);
+            return;
+          }
+          const t = await resp.text().catch(() => "");
+          setMeError(`Status ${resp.status}: ${t}`);
+          setMeLoaded(true);
+          return;
+        }
+  
+        const j = (await resp.json().catch(() => null)) as MeInfo | null;
+        const level = Number(j?.authority_level ?? 0);
+  
+        setMeInfo(j);
+        setMeError(null);
+        setMeLoaded(true);
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        setMeError(msg);
+        setMeInfo(null);
+        setMeLoaded(true);
+      }
+    })();
+  }, []);
+
+  
 
   // NEW: inline "Add Asset" draft state (UI-only)
   const [newAssetDraft, setNewAssetDraft] = useState<{
@@ -718,32 +840,66 @@ export default function Page() {
       const id = sid ?? scenarioId;
       if (!id) return;
 
-      const s = (await getScenario(id)) as Scenario | null;
+      try {
+        let s: Scenario | null = null;
+        let protocolState: Record<string, unknown> | null = null;
+        let activePortfolioId: string | null = null;
+        let activePolicyId: string | null = null;
+        let nextMode: "protocol" | "simulation" = "protocol";
 
-      setScenario((prev) => {
-        const prevLast = prev?.last_tick ?? null;
-        const nextLast = s?.last_tick ?? null;
-        // if server didn't send last_tick, keep the existing one
-        const mergedLast = nextLast ?? prevLast;
-        return { ...(s ?? {}), ...(mergedLast ? { last_tick: mergedLast } : {}) };
-      });
+        if (isObserver || id === OBSERVE_SCENARIO_ID) {
+          const raw = (await getScenarioSession(OBSERVE_SCENARIO_ID)) as Scenario | null;
+          if (!raw || typeof raw !== "object") return;
+          const rawRec = raw as Record<string, unknown>;
+          s = raw;
+          protocolState = (rawRec["protocol_state"] ?? null) as Record<string, unknown> | null;
+          activePortfolioId = typeof rawRec["active_portfolio_id"] === "string" ? (rawRec["active_portfolio_id"] as string) : null;
+          activePolicyId = typeof rawRec["active_policy_id"] === "string" ? (rawRec["active_policy_id"] as string) : null;
+          nextMode = rawRec["mode"] === "simulation" ? "simulation" : "protocol";
+        } else {
+          const detail = (await getScenario(id)) as ScenarioDetail | null;
+          if (!detail || typeof detail !== "object") return;
+          const stateRaw =
+            detail.state_json && typeof detail.state_json === "object" ? (detail.state_json as Record<string, unknown>) : {};
+          s = stateRaw as Scenario;
+          protocolState = (stateRaw["protocol_state"] ?? null) as Record<string, unknown> | null;
+          activePortfolioId = detail.active_portfolio_id ?? null;
+          activePolicyId = detail.active_policy_id ?? null;
+          nextMode = detail.mode === "simulation" ? "simulation" : "protocol";
+        }
 
-      // Ensure draft exists even if API omits portfolio or assets
-      const pRaw = (s?.portfolio ?? null) as Portfolio | null;
-      const assets = Array.isArray(pRaw?.assets) ? pRaw!.assets : [];
-      const p: Portfolio = { ...(pRaw ?? {}), assets };
-      setPortfolioDraft(p);
+        setScenarioActivePortfolioId(activePortfolioId);
+        setScenarioActivePolicyId(activePolicyId);
+        setMode(nextMode);
 
-      const c = (s?.constraints ?? null) as Constraints | null;
-      const preserveConstraints = opts?.preserveConstraints && constraintsDraftRef.current;
-      if (!preserveConstraints) {
-        setConstraintsDraft(applyConstraintDefaults(c));
+        setScenario((prev) => {
+          const prevLast = prev?.last_tick ?? null;
+          const nextLast = s?.last_tick ?? null;
+          // if server didn't send last_tick, keep the existing one
+          const mergedLast = nextLast ?? prevLast;
+          return { ...(s ?? {}), ...(mergedLast ? { last_tick: mergedLast } : {}) };
+        });
+
+        // Ensure draft exists even if API omits portfolio or assets
+        const pRaw = (s?.portfolio ?? (protocolState?.["portfolio"] as Portfolio | undefined) ?? null) as Portfolio | null;
+        const assets = Array.isArray(pRaw?.assets) ? pRaw!.assets : [];
+        const p: Portfolio = { ...(pRaw ?? {}), assets };
+        setPortfolioDraft(p);
+
+        const c = (s?.constraints ?? (protocolState?.["constraints"] as Constraints | undefined) ?? null) as Constraints | null;
+        const preserveConstraints = opts?.preserveConstraints && constraintsDraftRef.current;
+        if (!preserveConstraints) {
+          setConstraintsDraft(applyConstraintDefaults(c));
+        }
+
+        const inflow = typeof s?.capital_inflow_amount === "number" ? s.capital_inflow_amount : null;
+        setInflowDraft(inflow);
+      } catch (e) {
+        console.error("Failed to load scenario", e);
+        setMessage("Failed to load scenario");
       }
-
-      const inflow = typeof s?.capital_inflow_amount === "number" ? s.capital_inflow_amount : null;
-      setInflowDraft(inflow);
     },
-    [scenarioId]
+    [getScenario, getScenarioSession, isObserver, scenarioId]
   );
 
   const loadTicks = useCallback(
@@ -813,6 +969,88 @@ export default function Page() {
     [scenarioId]
   );
 
+  const loadScenarioList = useCallback(async () => {
+    if (!meLoaded) return;
+    if (isObserver) {
+      const observeSummary: ScenarioSummary = {
+        id: OBSERVE_SCENARIO_ID,
+        name: "Observe",
+        label: "Observe",
+        mode: "protocol",
+        active_portfolio_id: null,
+        active_policy_id: null,
+        updatedAt: null,
+      };
+      setScenarios([observeSummary]);
+      setScenariosLoaded(true);
+      if (scenarioId !== OBSERVE_SCENARIO_ID) {
+        setScenarioId(OBSERVE_SCENARIO_ID);
+      }
+      return;
+    }
+    setScenariosLoaded(false);
+    try {
+      const rows = await listScenarios();
+      const list = Array.isArray(rows) ? rows : [];
+      setScenarios(list);
+      setScenariosLoaded(true);
+
+      if (list.length > 0) {
+        if (!scenarioId || !list.some((s) => s.id === scenarioId)) {
+          setScenarioId(list[0].id);
+        }
+      } else if (canWrite) {
+        const created = await createScenario({ mode });
+        setScenarios([created]);
+        setScenarioId(created.id);
+      } else {
+        setScenarioId(null);
+      }
+    } catch (e) {
+      console.error("Failed to load scenarios", e);
+      setScenariosLoaded(true);
+    }
+  }, [canWrite, createScenario, isObserver, listScenarios, meLoaded, mode, scenarioId]);
+
+  const newScenario = useCallback(async () => {
+    if (authorityLevel === null) return;
+    if (authorityLevel < 1) {
+      setMessage("Sandbox Authority required to create scenarios.");
+      return;
+    }
+    if (creatingRef.current) return;
+    creatingRef.current = true;
+    setIsCreating(true);
+    setLoading(true);
+    try {
+      const created = await createScenario({ mode });
+      setScenarios((prev) => {
+        const existing = Array.isArray(prev) ? prev : [];
+        const next = [created, ...existing.filter((s) => s.id !== created.id)];
+        return next;
+      });
+      setScenario(null);
+      setTicks([]);
+      setSelectedTickJson(null);
+      setSavedDecisionRunsLoaded(false);
+      setSavedDecisionTicks([]);
+      setScenarioId(created.id);
+    } catch (e) {
+      console.error("Failed to create scenario", e);
+      setMessage("Failed to create scenario");
+    } finally {
+      creatingRef.current = false;
+      setIsCreating(false);
+      setLoading(false);
+    }
+  }, [authorityLevel, createScenario, mode]);
+
+  useEffect(() => {
+    if (!meLoaded) return;
+    if (scenariosLoaded) return;
+    void loadScenarioList();
+  }, [loadScenarioList, meLoaded, scenariosLoaded]);
+
   // FIX: robust add handler (functional update; will create portfolioDraft if missing)
   const addAssetInline = useCallback(() => {
     const id = newAssetDraft.id.trim();
@@ -869,39 +1107,21 @@ export default function Page() {
     });
   }, [newAssetDraft]);
 
-  // CHANGE: newScenario must load using the returned id, not the (stale) state value.
-  const newScenario = useCallback(async () => {
+  
+
+  async function purchaseSandbox() {
     setLoading(true);
+
     try {
-      const created = await createScenario();
-      const newId =
-        typeof created === "string"
-          ? created
-          : (created as { scenario_id?: string; id?: string } | null | undefined)?.scenario_id ??
-            (created as { id?: string } | null | undefined)?.id ??
-            null;
+      const { url } = await postStripe("sandbox");
+      window.location.href = url;
 
-      if (!newId) throw new Error("createScenario did not return a scenario id");
-
-      setScenarioId(newId);
-      await Promise.all([loadScenario(newId), loadTicks(newId), loadScenarioTime(newId)]);
-    } finally {
+    } catch (e: unknown) {
       setLoading(false);
     }
-  }, [loadScenario, loadScenarioTime, loadTicks]);
+  }
 
-  // NEW: auto-create an initial session on first mount (same as clicking the button)
-  useEffect(() => {
-    if (scenarioId) return; // already have one
-    void newScenario();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
-  // NEW: when scenarioId changes (e.g., set elsewhere), load data
-  useEffect(() => {
-    if (!scenarioId) return;
-    void Promise.all([loadScenario(scenarioId), loadTicks(scenarioId), loadScenarioTime(scenarioId)]);
-  }, [scenarioId, loadScenario, loadTicks, loadScenarioTime]);
 
   const loadSimState = useCallback(async () => {
     if (!scenarioId) return;
@@ -934,14 +1154,14 @@ export default function Page() {
       // Put decision payload somewhere the UI already inspects (plan + top-level target_weights)
       const target_weights = decision["target_weights"];
       const next_allocation_weights = decision["next_allocation_weights"];
-        const decisionAi = decision["ai_explanation"];
-        const decisionNarrative = decision["narrative"];
-        const aiExplanation =
-          decisionAi && typeof decisionAi === "object"
-            ? (decisionAi as Tick["ai_explanation"])
-            : decisionNarrative && typeof decisionNarrative === "object"
-              ? (decisionNarrative as Tick["ai_explanation"])
-              : undefined;
+      const decisionAi = decision["ai_explanation"];
+      const decisionNarrative = decision["narrative"];
+      const aiExplanation =
+        decisionAi && typeof decisionAi === "object"
+          ? (decisionAi as Tick["ai_explanation"])
+          : decisionNarrative && typeof decisionNarrative === "object"
+            ? (decisionNarrative as Tick["ai_explanation"])
+            : undefined;
 
       const out: Tick = {
         tick_id: tickId,
@@ -963,24 +1183,24 @@ export default function Page() {
       // attach weights in the common places your extractor checks (no `any`)
       (out as Record<string, unknown>)["target_weights"] = target_weights;
       (out as Record<string, unknown>)["next_allocation_weights"] = next_allocation_weights;
-        const decisionKeys = [
-          "allocator_version",
-          "policy_id",
-          "policy_name",
-          "analysis_meta",
-          "decision_type",
-          "prior_tick_id",
-          "prior_target_weights",
-          "prior_source",
-          "prior_portfolio_weights",
-          "policy_snapshot",
-          "risk_summary",
-          "stability_metrics",
-          "pruning_summary",
-          "analysis_summary",
-          "linkage_scope",
-          "warnings",
-        ];
+      const decisionKeys = [
+        "allocator_version",
+        "policy_id",
+        "policy_name",
+        "analysis_meta",
+        "decision_type",
+        "prior_tick_id",
+        "prior_target_weights",
+        "prior_source",
+        "prior_portfolio_weights",
+        "policy_snapshot",
+        "risk_summary",
+        "stability_metrics",
+        "pruning_summary",
+        "analysis_summary",
+        "linkage_scope",
+        "warnings",
+      ];
       for (const key of decisionKeys) {
         if (key in decision) {
           (out as Record<string, unknown>)[key] = decision[key];
@@ -996,9 +1216,72 @@ export default function Page() {
     []
   );
 
-  // NEW: saved portfolio storage
-  const PORTFOLIO_STORAGE_KEY = "sagitta.aaa.v0.0.1.savedPortfolios";
-  const PORTFOLIO_SELECTED_KEY = "sagitta.aaa.v0.0.1.selectedPortfolioId";
+  const tickFromDecisionRunResult = useCallback(
+    (result: unknown): Tick | null => {
+      if (!result || typeof result !== "object") return null;
+      const obj = result as Record<string, unknown>;
+      const nested = obj["tick"];
+      if (nested && typeof nested === "object") {
+        return normalizeTickForList(nested as Tick) ?? makeSyntheticTickFromDecision(nested as Record<string, unknown>);
+      }
+      return normalizeTickForList(obj as Tick) ?? makeSyntheticTickFromDecision(obj as Record<string, unknown>);
+    },
+    [makeSyntheticTickFromDecision]
+  );
+
+  const loadSavedDecisionRuns = useCallback(
+    async (sid?: string) => {
+      if (!meLoaded) return;
+      const id = sid ?? scenarioId;
+      if (!id || !isUuid(id)) return;
+      setSavedDecisionRunsLoaded(false);
+      try {
+        const res = (await listScenarioDecisionRuns(id, { limit: 25 })) as { items?: DecisionRunRow[] } | null;
+        const items = Array.isArray(res?.items) ? (res!.items as DecisionRunRow[]) : [];
+        const details = await Promise.all(
+          items.map(async (item) => {
+            try {
+              return (await getDecisionRun(item.id)) as DecisionRun;
+            } catch (e) {
+              console.error("Failed to load decision run detail", item.id, e);
+              return null;
+            }
+          })
+        );
+        const ticks = details
+          .map((d) => (d ? tickFromDecisionRunResult(d.result) : null))
+          .filter(Boolean)
+          .map((t) => {
+            const rec = t as Record<string, unknown>;
+            if (rec["_ui_context"]) return t as Tick;
+            return {
+              ...(t as Tick),
+              _ui_context: {
+                portfolioLabel: "(saved)",
+                policyLabel: "(saved)",
+              },
+            } as Tick;
+          }) as Tick[];
+        setSavedDecisionTicks(ticks);
+      } catch (e) {
+        console.error("Failed to load saved decision runs", e);
+        setSavedDecisionTicks([]);
+      } finally {
+        setSavedDecisionRunsLoaded(true);
+      }
+    },
+    [getDecisionRun, listScenarioDecisionRuns, meLoaded, scenarioId, tickFromDecisionRunResult]
+  );
+
+  useEffect(() => {
+    if (!meLoaded) return;
+    if (!scenarioId || !isUuid(scenarioId)) return;
+    if (ticks.length || scenario?.last_tick) return;
+    if (savedDecisionRunsLoaded) return;
+    void loadSavedDecisionRuns(scenarioId);
+  }, [loadSavedDecisionRuns, meLoaded, savedDecisionRunsLoaded, scenario?.last_tick, scenarioId, ticks.length]);
+
+  // Saved portfolio catalog (API-backed)
 
   type SavedPortfolio = {
     id: string;
@@ -1011,24 +1294,112 @@ export default function Page() {
   const [selectedSavedPortfolioId, setSelectedSavedPortfolioId] = useState<string>("");
   const [portfolioNameDraft, setPortfolioNameDraft] = useState<string>("");
 
-  const loadSavedPortfolio = useCallback(
-    (id: string) => {
-      const found = savedPortfolios.find((p) => p.id === id);
-      if (!found) return;
+  useEffect(() => {
+    if (!scenarioId) {
+      setScenario(null);
+      setTicks([]);
+      setSelectedTickJson(null);
+      setSavedDecisionRunsLoaded(false);
+      setSavedDecisionTicks([]);
+      setScenarioActivePortfolioId(null);
+      setScenarioActivePolicyId(null);
+      setSelectedSavedPortfolioId("");
+      setPortfolioNameDraft("");
+      setSelectedPolicyId(null);
+      setPolicyNameDraft("");
+      setPortfolioTouched(false);
+      setConstraintsTouched(false);
+      setRegimeTouched(false);
+      setRiskPostureTouched(false);
+      setSectorSentimentTouched(false);
+      setInflowTouched(false);
+      return;
+    }
+    setScenario(null);
+    setTicks([]);
+    setSelectedTickJson(null);
+    setSavedDecisionRunsLoaded(false);
+    setSavedDecisionTicks([]);
+    setScenarioActivePortfolioId(null);
+    setScenarioActivePolicyId(null);
+    setSelectedSavedPortfolioId("");
+    setPortfolioNameDraft("");
+    setSelectedPolicyId(null);
+    setPolicyNameDraft("");
+    setPortfolioTouched(false);
+    setConstraintsTouched(false);
+    setRegimeTouched(false);
+    setRiskPostureTouched(false);
+    setSectorSentimentTouched(false);
+    setInflowTouched(false);
 
+    void (async () => {
+      await loadScenario(scenarioId);
+      await Promise.all([loadTicks(scenarioId), loadScenarioTime(scenarioId)]);
+    })();
+  }, [loadScenario, loadScenarioTime, loadTicks, scenarioId]);
+
+  useEffect(() => {
+    if (!meLoaded) return;
+    if (!canWrite) return;
+    (async () => {
+      try {
+        const rows = await listPortfolios();
+        // map into your SavedPortfolio shape (portfolio omitted until fetched)
+        setSavedPortfolios(rows.map(r => ({
+          id: r.id,
+          name: r.name,
+          updatedAt: r.updatedAt,
+          portfolio: { assets: [] }, // placeholder; real loaded on select
+        })));
+      } catch (e) {
+        console.error(e);
+      }
+    })();
+  }, [meLoaded]);
+  
+
+  const loadSavedPortfolio = useCallback(async (id: string, opts?: { skipActiveUpdate?: boolean; markTouched?: boolean }) => {
+    if (!canWrite) {
+      setMessage("Observer mode: portfolios are read-only.");
+      return;
+    }
+    try {
+      const found = await getPortfolio(id);
+  
       const pRaw = (found.portfolio ?? null) as Portfolio | null;
       const assets = Array.isArray(pRaw?.assets) ? pRaw!.assets : [];
       const p: Portfolio = { ...(pRaw ?? {}), assets };
-
+  
+      const markTouched = opts?.markTouched !== false;
       setPortfolioDraft(p);
-      setPortfolioTouched(true);
-
-      // Helpful: if the name field is blank, populate from library name
-      setPortfolioNameDraft((cur) => (cur.trim() ? cur : found.name));
+      setPortfolioTouched(markTouched);
+      setSelectedSavedPortfolioId(found.id);
+      setPortfolioNameDraft(found.name);
       setMessage(null);
-    },
-    [savedPortfolios]
-  );
+
+      if (!opts?.skipActiveUpdate && scenarioId) {
+        await setScenarioActive(scenarioId, { active_portfolio_id: found.id });
+        setScenarioActivePortfolioId(found.id);
+      }
+  
+    } catch (e) {
+      console.error(e);
+      setMessage("Failed to load portfolio");
+    }
+  }, [canWrite, scenarioId, setScenarioActive]);
+
+  useEffect(() => {
+    if (!scenarioId) return;
+    if (!canWrite) return;
+    if (!scenarioActivePortfolioId || !isUuid(scenarioActivePortfolioId)) {
+      setSelectedSavedPortfolioId("");
+      return;
+    }
+    if (scenarioActivePortfolioId === selectedSavedPortfolioId) return;
+    void loadSavedPortfolio(scenarioActivePortfolioId, { skipActiveUpdate: true, markTouched: false });
+  }, [canWrite, loadSavedPortfolio, scenarioActivePortfolioId, scenarioId, selectedSavedPortfolioId]);
+  
 
   const clearPortfolio = useCallback(() => {
     setPortfolioDraft({ assets: [] });
@@ -1037,30 +1408,41 @@ export default function Page() {
     setMessage(null);
   }, []);
 
-  const saveCurrentPortfolioToLibrary = useCallback(() => {
-    const nowIso = new Date().toISOString();
-    const id = selectedSavedPortfolioId || makePolicyId(nowIso);
-    const name = (portfolioNameDraft || "").trim() || "Untitled Portfolio";
+  const saveCurrentPortfolioToLibrary = useCallback(async () => {
+    try {
+      const name = (portfolioNameDraft || "").trim() || "Untitled Portfolio";
+  
+      const pRaw = (portfolioDraft ?? null) as Portfolio | null;
+      const assets = Array.isArray(pRaw?.assets) ? pRaw!.assets : [];
+      const portfolioToSave: Portfolio = { ...(pRaw ?? { assets: [] }), assets };
+  
+      const resp = await upsertPortfolio({
+        id: selectedSavedPortfolioId || undefined,
+        name,
+        portfolio: portfolioToSave,
+      });
+  
+      // refresh list row locally
+      setSavedPortfolios(prev => {
+        const nextRow = { id: resp.id, name: resp.name, updatedAt: resp.updatedAt, portfolio: portfolioToSave };
+        const exists = prev.some(p => p.id === resp.id);
+        return exists ? prev.map(p => (p.id === resp.id ? nextRow : p)) : [nextRow, ...prev];
+      });
+  
+      setSelectedSavedPortfolioId(resp.id);
+      setMessage("Portfolio saved");
 
-    const pRaw = (portfolioDraft ?? null) as Portfolio | null;
-    const assets = Array.isArray(pRaw?.assets) ? pRaw!.assets : [];
-    const portfolioToSave: Portfolio = { ...(pRaw ?? { assets: [] }), assets };
-
-    const next: SavedPortfolio = {
-      id,
-      name,
-      updatedAt: nowIso,
-      portfolio: portfolioToSave,
-    };
-
-    setSavedPortfolios((prev) => {
-      const exists = prev.some((p) => p.id === id);
-      return exists ? prev.map((p) => (p.id === id ? next : p)) : [next, ...prev];
-    });
-
-    setSelectedSavedPortfolioId(id);
-    setMessage("Portfolio saved");
-  }, [portfolioDraft, portfolioNameDraft, selectedSavedPortfolioId]);
+      if (scenarioId) {
+        await setScenarioActive(scenarioId, { active_portfolio_id: resp.id });
+        setScenarioActivePortfolioId(resp.id);
+      }
+  
+    } catch (e) {
+      console.error(e);
+      setMessage("Failed to save portfolio");
+    }
+  }, [portfolioDraft, portfolioNameDraft, selectedSavedPortfolioId, scenarioId, setScenarioActive, upsertPortfolio]);
+  
 
   const resetImportPreview = useCallback(() => {
     setImportPreview(null);
@@ -1132,57 +1514,37 @@ export default function Page() {
       if (!ok) return;
     }
 
-    setPortfolioDraft({ assets: importPreviewAssets.map((a) => ({
-      id: a.id,
-      name: a.name,
-      risk_class: a.risk_class as RiskClass,
-      role: (a.role as AssetRole) || "satellite",
-      current_weight: a.current_weight,
-      expected_return: a.expected_return,
-      volatility: a.volatility,
-    }))});
+    setPortfolioDraft({
+      assets: importPreviewAssets.map((a) => ({
+        id: a.id,
+        name: a.name,
+        risk_class: a.risk_class as RiskClass,
+        role: (a.role as AssetRole) || "satellite",
+        current_weight: a.current_weight,
+        expected_return: a.expected_return,
+        volatility: a.volatility,
+      }))
+    });
     setPortfolioTouched(true);
     setSelectedSavedPortfolioId("");
     setMessage("Portfolio imported into editor");
     setImportModalOpen(false);
   }, [importPreviewAssets]);
 
-  // NEW: load saved portfolios on mount
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const raw = window.localStorage.getItem(PORTFOLIO_STORAGE_KEY);
-    const loaded = raw ? safeJsonParse<SavedPortfolio[]>(raw, []) : [];
-    setSavedPortfolios(Array.isArray(loaded) ? loaded : []);
-    const sel = window.localStorage.getItem(PORTFOLIO_SELECTED_KEY) || "";
-    setSelectedSavedPortfolioId(sel);
-  }, []);
-
-  // NEW: persist saved portfolios
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    window.localStorage.setItem(PORTFOLIO_STORAGE_KEY, JSON.stringify(savedPortfolios));
-  }, [savedPortfolios]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    if (selectedSavedPortfolioId) window.localStorage.setItem(PORTFOLIO_SELECTED_KEY, selectedSavedPortfolioId);
-    else window.localStorage.removeItem(PORTFOLIO_SELECTED_KEY);
-  }, [selectedSavedPortfolioId]);
-
   // NEW: helper to compute labels for the current UI state (used at execution time)
   const getExecutionContextLabels = useCallback(() => {
     const portfolioLabel = selectedSavedPortfolioId
       ? (() => {
-          const p = savedPortfolios.find((x) => x.id === selectedSavedPortfolioId);
-          return p?.name ? p.name : selectedSavedPortfolioId;
-        })()
+        const p = savedPortfolios.find((x) => x.id === selectedSavedPortfolioId);
+        return p?.name ? p.name : selectedSavedPortfolioId;
+      })()
       : "(current)";
 
     const policyLabel = selectedPolicyId
       ? (() => {
-          const p = policies.find((x) => x.id === selectedPolicyId);
-          return p?.name ? p.name : selectedPolicyId;
-        })()
+        const p = policies.find((x) => x.id === selectedPolicyId);
+        return p?.name ? p.name : selectedPolicyId;
+      })()
       : ((policyNameDraft || "").trim() || "(unsaved)");
 
     return { portfolioLabel, policyLabel };
@@ -1190,6 +1552,7 @@ export default function Page() {
 
   // CHANGE: ensure runTick refresh makes Decision Results appear reliably
   const onRunTick = useCallback(async () => {
+    console.log("onRunTick called " + scenarioId);
     if (!scenarioId) return;
     setLoading(true);
     try {
@@ -1236,6 +1599,31 @@ export default function Page() {
         });
       }
 
+      const shouldPersistDecisionRun =
+        canWrite && !!scenarioId && isUuid(scenarioId) && runDecisionType === "allocation";
+      if (shouldPersistDecisionRun) {
+        const decisionResult =
+          created && typeof created === "object" ? (created as Record<string, unknown>) : { value: created };
+        const policyPayload: PolicyPayload = {
+          decisionType: "treasury_batch_allocation",
+          allocatorVersion: allocatorToUse as AllocatorVersion,
+          constraints: constraintsDraft ?? {},
+          regime: regimeDraft ?? {},
+        };
+        try {
+          await createDecisionRun({
+            scenarioId,
+            allocatorVersion: allocatorToUse,
+            decisionType: "allocation",
+            portfolio: portfolioDraft ?? null,
+            policy: policyPayload as unknown as Record<string, unknown>,
+            result: decisionResult,
+          });
+        } catch (e) {
+          console.error("Failed to persist decision run", e);
+        }
+      }
+
       setHiddenTickIds(new Set());
       setTickUiTouched(false);
 
@@ -1245,13 +1633,18 @@ export default function Page() {
     }
   }, [
     scenarioId,
+    canWrite,
     loadScenario,
     loadScenarioTime,
     loadTicks,
+    createDecisionRun,
     makeSyntheticTickFromDecision,
     getExecutionContextLabels,
     selectedSavedPortfolioId,
     selectedPolicyId,
+    portfolioDraft,
+    constraintsDraft,
+    regimeDraft,
     runDecisionType,
     allocatorVersion,
     policyNameDraft,
@@ -1482,24 +1875,44 @@ export default function Page() {
   }, [selectedAllocatorSchemaVersion]);
 
   useEffect(() => {
-    if (typeof window === "undefined") return;
-    const raw = window.localStorage.getItem(POLICY_STORAGE_KEY);
-    const loaded = raw ? safeJsonParse<AllocationPolicy[]>(raw, []) : [];
-    setPolicies(Array.isArray(loaded) ? loaded : []);
-    const sel = window.localStorage.getItem(POLICY_SELECTED_KEY);
-    setSelectedPolicyId(sel || null);
-  }, []);
+    if (!meLoaded) return;
+    if (!canWrite) return;
+    (async () => {
+      try {
+        const res = (await listPolicies()) as { items?: SavedPolicyRow[] } | null;
+        const items = Array.isArray(res?.items) ? res!.items : [];
+        const details = await Promise.all(
+          items.map(async (item) => {
+            try {
+              const detail = (await getPolicy(item.id)) as SavedPolicy | null;
+              if (!detail || typeof detail !== "object") {
+                return {
+                  id: item.id,
+                  name: item.name,
+                  updatedAt: item.updatedAt || new Date().toISOString(),
+                  policy: coercePolicyPayload({}),
+                } as SavedPolicy;
+              }
+              return {
+                id: typeof detail.id === "string" ? detail.id : item.id,
+                name: typeof detail.name === "string" ? detail.name : item.name,
+                updatedAt: typeof detail.updatedAt === "string" ? detail.updatedAt : (item.updatedAt || new Date().toISOString()),
+                policy: coercePolicyPayload(detail.policy),
+              } as SavedPolicy;
+            } catch (e) {
+              console.error("Failed to load policy", item.id, e);
+              return null;
+            }
+          })
+        );
 
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    window.localStorage.setItem(POLICY_STORAGE_KEY, JSON.stringify(policies));
-  }, [policies]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    if (selectedPolicyId) window.localStorage.setItem(POLICY_SELECTED_KEY, selectedPolicyId);
-    else window.localStorage.removeItem(POLICY_SELECTED_KEY);
-  }, [selectedPolicyId]);
+        const saved = details.filter(Boolean) as SavedPolicy[];
+        setPolicies(saved.map(savedPolicyToAllocationPolicy));
+      } catch (e) {
+        console.error("Failed to load policies", e);
+      }
+    })();
+  }, [canWrite, meLoaded]);
 
   useEffect(() => {
     if (!selectedPolicyId) return;
@@ -1516,32 +1929,95 @@ export default function Page() {
     setPolicyNameDraft(p.name ?? "");
   }, [selectedPolicyId, policies]);
 
-  const saveAllocationPolicy = useCallback(() => {
-    const nowIso = new Date().toISOString();
-    const id = selectedPolicyId ?? makePolicyId(nowIso);
+  const loadSavedPolicy = useCallback(async (id: string, opts?: { skipActiveUpdate?: boolean }) => {
+    if (!canWrite) {
+      setMessage("Observer mode: policies are read-only.");
+      return;
+    }
+    try {
+      const detail = (await getPolicy(id)) as SavedPolicy | null;
+      if (!detail || typeof detail !== "object") throw new Error("policy detail missing");
+      const normalized: SavedPolicy = {
+        id: typeof detail.id === "string" ? detail.id : id,
+        name: typeof detail.name === "string" ? detail.name : "Untitled Policy",
+        updatedAt: typeof detail.updatedAt === "string" ? detail.updatedAt : new Date().toISOString(),
+        policy: coercePolicyPayload(detail.policy),
+      };
+      const next = savedPolicyToAllocationPolicy(normalized);
+      setPolicies((prev) => {
+        const exists = prev.some((p) => p.id === next.id);
+        return exists ? prev.map((p) => (p.id === next.id ? next : p)) : [next, ...prev];
+      });
+      setSelectedPolicyId(next.id);
+      if (!opts?.skipActiveUpdate && scenarioId) {
+        await setScenarioActive(scenarioId, { active_policy_id: next.id });
+        setScenarioActivePolicyId(next.id);
+      }
+    } catch (e) {
+      console.error("Failed to load policy", e);
+      setMessage("Failed to load policy");
+    }
+  }, [canWrite, scenarioId, setScenarioActive]);
 
+  useEffect(() => {
+    if (!scenarioId) return;
+    if (!canWrite) return;
+    if (!scenarioActivePolicyId || !isUuid(scenarioActivePolicyId)) {
+      setSelectedPolicyId(null);
+      return;
+    }
+    if (scenarioActivePolicyId === selectedPolicyId) return;
+    void loadSavedPolicy(scenarioActivePolicyId, { skipActiveUpdate: true });
+  }, [canWrite, loadSavedPolicy, scenarioActivePolicyId, scenarioId, selectedPolicyId]);
+
+  const saveAllocationPolicy = useCallback(async () => {
     const draftConstraints = constraintsDraft ?? {};
     const draftRegime = regimeDraft ?? {};
+    const name = (policyNameDraft || "").trim() || "Untitled Policy";
 
-    const name = (policyNameDraft || "").trim() || "Unsaved Policy";
-
-    const next: AllocationPolicy = {
-      id,
-      name,
-      createdAt: selectedPolicyId ? (policies.find((p) => p.id === id)?.createdAt ?? nowIso) : nowIso,
-      updatedAt: nowIso,
+    const policyPayload: PolicyPayload = {
       decisionType: "treasury_batch_allocation",
       allocatorVersion: allocatorVersion ?? "default",
       constraints: draftConstraints,
       regime: draftRegime,
     };
 
-    setPolicies((prev) => {
-      const exists = prev.some((p) => p.id === id);
-      return exists ? prev.map((p) => (p.id === id ? next : p)) : [next, ...prev];
-    });
-    setSelectedPolicyId(id);
-  }, [allocatorVersion, constraintsDraft, regimeDraft, policies, policyNameDraft, selectedPolicyId]);
+    try {
+      const savedRaw = (await upsertPolicy({
+        id: selectedPolicyId ?? undefined,
+        name,
+        policy: policyPayload as unknown as Record<string, unknown>,
+      })) as SavedPolicy;
+
+      const resolvedId =
+        typeof savedRaw?.id === "string" && savedRaw.id
+          ? savedRaw.id
+          : selectedPolicyId;
+      if (!resolvedId) throw new Error("policy save did not return an id");
+
+      const normalized: SavedPolicy = {
+        id: resolvedId,
+        name: typeof savedRaw?.name === "string" ? savedRaw.name : name,
+        updatedAt: typeof savedRaw?.updatedAt === "string" ? savedRaw.updatedAt : new Date().toISOString(),
+        policy: coercePolicyPayload(savedRaw?.policy ?? policyPayload),
+      };
+
+      const next = savedPolicyToAllocationPolicy(normalized);
+      setPolicies((prev) => {
+        const exists = prev.some((p) => p.id === next.id);
+        return exists ? prev.map((p) => (p.id === next.id ? next : p)) : [next, ...prev];
+      });
+      setSelectedPolicyId(next.id);
+      if (scenarioId) {
+        await setScenarioActive(scenarioId, { active_policy_id: next.id });
+        setScenarioActivePolicyId(next.id);
+      }
+      setMessage("Policy saved");
+    } catch (e) {
+      console.error("Failed to save policy", e);
+      setMessage("Failed to save policy");
+    }
+  }, [allocatorVersion, constraintsDraft, regimeDraft, policyNameDraft, selectedPolicyId, scenarioId, setScenarioActive, upsertPolicy]);
 
   const newAllocationPolicy = useCallback(() => {
     setSelectedPolicyId(null);
@@ -1584,19 +2060,25 @@ export default function Page() {
     setLoading(true);
 
     try {
-      const created = await createScenario();
+      const created = await createScenario({ mode: "simulation" });
       const newId =
         typeof created === "string"
           ? created
           : (created as { scenario_id?: string; id?: string } | null | undefined)?.scenario_id ??
-            (created as { id?: string } | null | undefined)?.id ??
-            null;
+          (created as { id?: string } | null | undefined)?.id ??
+          null;
 
       if (!newId) {
         console.error("createScenario did not return a scenario id:", created);
         return null;
       }
 
+      setScenarios((prev) => {
+        const existing = Array.isArray(prev) ? prev : [];
+        const createdRow = created as ScenarioSummary;
+        const next = [createdRow, ...existing.filter((s) => s.id !== createdRow.id)];
+        return next;
+      });
       setScenarioId(newId);
 
       setScenario(null);
@@ -1604,6 +2086,7 @@ export default function Page() {
       setSelectedTickJson(null);
 
       await Promise.all([loadScenario(newId), loadTicks(newId), loadScenarioTime?.(newId)]);
+      
 
       return newId;
     } catch (e) {
@@ -1766,12 +2249,21 @@ export default function Page() {
   const [expandedTickIds, setExpandedTickIds] = useState<Set<string>>(new Set());
   const [expandedAbRunIds, setExpandedAbRunIds] = useState<Set<string>>(new Set());
   const [expandedExplainIds, setExpandedExplainIds] = useState<Set<string>>(new Set());
+  const [expandedPolicyImpactIds, setExpandedPolicyImpactIds] = useState<Set<string>>(new Set());
   const [explainPendingIds, setExplainPendingIds] = useState<Set<string>>(new Set());
   const [explainOverrides, setExplainOverrides] = useState<Record<string, unknown>>({});
 
   // NEW: prevents auto-expand from fighting the user's manual toggles
   const [tickUiTouched, setTickUiTouched] = useState<boolean>(false);
   const [abUiTouched, setAbUiTouched] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (!scenarioId) return;
+    setHiddenTickIds(new Set());
+    setExpandedTickIds(new Set());
+    setExpandedExplainIds(new Set());
+    setTickUiTouched(false);
+  }, [scenarioId]);
 
   const formatTs = useCallback((v?: string) => {
     if (!v) return "—";
@@ -2125,6 +2617,21 @@ export default function Page() {
       const notes = Array.isArray(analysis?.["notes"]) ? (analysis?.["notes"] as string[]) : [];
       const missingSource = notes.includes("MISSING_PRIOR");
 
+      const roleEffects = getRoleEffectsFromTick(tick);
+      const roleStatus = typeof roleEffects?.["status"] === "string" ? (roleEffects["status"] as string) : null;
+      const dominanceLabel =
+        roleStatus === "applied"
+          ? "Core Dominance: Applied"
+          : roleStatus === "blocked_by_constraints"
+            ? "Core Dominance: Blocked"
+            : null;
+      const dominanceStyle =
+        roleStatus === "applied"
+          ? { color: "#2a7a3a", background: "rgba(16,185,129,0.12)", border: "1px solid rgba(16,185,129,0.35)" }
+          : roleStatus === "blocked_by_constraints"
+            ? { color: "#b45f00", background: "rgba(245,158,11,0.12)", border: "1px solid rgba(245,158,11,0.35)" }
+            : null;
+
       const riskDelta = typeof analysis?.["risk_delta"] === "number" ? (analysis?.["risk_delta"] as number) : null;
       const churnPct = typeof analysis?.["churn_pct"] === "number" ? (analysis?.["churn_pct"] as number) : null;
       const maxShiftAsset =
@@ -2147,6 +2654,9 @@ export default function Page() {
         <div style={{ background: "#0b0b0b", padding: 10, borderRadius: 8, border: "1px solid rgba(255,255,255,0.06)", marginBottom: 10 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <strong>Decision Analysis</strong>
+            {dominanceLabel && dominanceStyle ? (
+              <span style={{ fontSize: 12, padding: "2px 8px", borderRadius: 999, ...dominanceStyle }}>{dominanceLabel}</span>
+            ) : null}
             {missing ? (
               <span style={{ fontSize: 12, color: "#7a4a00", background: "rgba(245,158,11,0.12)", border: "1px solid rgba(245,158,11,0.35)", padding: "2px 8px", borderRadius: 999 }}>
                 Analysis unavailable
@@ -2187,7 +2697,7 @@ export default function Page() {
         </div>
       );
     },
-    [getAnalysisSummaryFromTick, getPruningSummaryFromTick, getTickContextLabel]
+    [getAnalysisSummaryFromTick, getPruningSummaryFromTick, getTickContextLabel, getRoleEffectsFromTick]
   );
 
   const renderPolicyImpactSection = useCallback(
@@ -2219,10 +2729,10 @@ export default function Page() {
           roleStatus === "applied"
             ? "Core dominance applied."
             : roleStatus === "blocked_by_constraints"
-            ? "Core dominance blocked by constraints."
-            : roleStatus === "not_needed"
-            ? "Core dominance not needed."
-            : `Core dominance status: ${roleStatus}`;
+              ? "Core dominance blocked by constraints."
+              : roleStatus === "not_needed"
+                ? "Core dominance not needed."
+                : `Core dominance status: ${roleStatus}`;
         roleSummary.push(statusLabel);
       }
       if (roleBlockers.length) {
@@ -2301,11 +2811,28 @@ export default function Page() {
       }
 
       const notes = Array.isArray(effects?.["notes"]) ? (effects?.["notes"] as string[]) : [];
+      const impactOpen = !!tick.tick_id && expandedPolicyImpactIds.has(tick.tick_id);
+      const impactArrow = impactOpen ? "\u25B2" : "\u25BC";
 
       return (
-        <details style={{ background: "#0b0b0b", padding: 10, borderRadius: 8, border: "1px solid rgba(255,255,255,0.06)", marginBottom: 10 }}>
+        <details
+          style={{ background: "#0b0b0b", padding: 10, borderRadius: 8, border: "1px solid rgba(255,255,255,0.06)", marginBottom: 10 }}
+          onToggle={(e) => {
+            if (!tick.tick_id) return;
+            const isOpen = (e.currentTarget as HTMLDetailsElement).open;
+            setExpandedPolicyImpactIds((prev) => {
+              const next = new Set(prev);
+              if (isOpen) next.add(tick.tick_id);
+              else next.delete(tick.tick_id);
+              return next;
+            });
+          }}
+        >
           <summary style={{ cursor: "pointer", listStyle: "none" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span aria-hidden="true" style={{ fontSize: 12, color: "#aaa", lineHeight: 1 }}>
+                {impactArrow}
+              </span>
               <strong>Policy Impact &amp; Sensitivity</strong>
               {equivalent ? (
                 <span style={{ fontSize: 12, color: "#2a7a3a", background: "rgba(16,185,129,0.12)", border: "1px solid rgba(16,185,129,0.35)", padding: "2px 8px", borderRadius: 999 }}>
@@ -2409,7 +2936,7 @@ export default function Page() {
         </details>
       );
     },
-    [getPolicyEffectsFromTick, getRoleEffectsFromTick, getPolicySensitivityFromTick, getPolicyEquivalenceFromTick]
+    [expandedPolicyImpactIds, getPolicyEffectsFromTick, getRoleEffectsFromTick, getPolicySensitivityFromTick, getPolicyEquivalenceFromTick]
   );
 
   const renderExplainPayload = useCallback((payload: unknown) => {
@@ -2533,7 +3060,8 @@ export default function Page() {
     const fallbackLast = last ?? (latestTick ? normalizeTickForList(latestTick) : null);
 
     const combined = [...fromTicks, ...(fallbackLast ? [fallbackLast] : [])];
-    const filtered = combined.filter((t) => (t?.tick_id ? !hiddenTickIds.has(t.tick_id) : true));
+    const base = combined.length ? combined : savedDecisionTicks;
+    const filtered = base.filter((t) => (t?.tick_id ? !hiddenTickIds.has(t.tick_id) : true));
 
     const seen = new Set<string>();
     const deduped: Tick[] = [];
@@ -2547,7 +3075,7 @@ export default function Page() {
 
     deduped.sort((a, b) => String(b.timestamp || "").localeCompare(String(a.timestamp || "")));
     return deduped;
-  }, [ticks, scenario?.last_tick, latestTick, hiddenTickIds, getTickIdSafe]);
+  }, [ticks, scenario?.last_tick, latestTick, hiddenTickIds, getTickIdSafe, savedDecisionTicks]);
 
   const simTicksA = simResult?.results?.A?.ticks ?? [];
   const simTicksB = simResult?.results?.B?.ticks ?? [];
@@ -2641,35 +3169,12 @@ export default function Page() {
     [extractTargetWeightsFromTick]
   );
 
-  // NEW: A/B localStorage keys
-  const POLICY_A_SELECTED_KEY = "sagitta.aaa.v0.0.1.selectedPolicyAId";
-  const POLICY_B_SELECTED_KEY = "sagitta.aaa.v0.0.1.selectedPolicyBId";
-
   // NEW: DEV-only request preview for A/B (must not change requests)
   const SHOW_DEV_AB_REQUEST_PREVIEW = false;
 
-  // NEW: A/B selection state (persisted)
+  // NEW: A/B selection state
   const [selectedPolicyAId, setSelectedPolicyAId] = useState<string>("");
   const [selectedPolicyBId, setSelectedPolicyBId] = useState<string>("");
-
-  // NEW: load persisted A/B selections
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    setSelectedPolicyAId(window.localStorage.getItem(POLICY_A_SELECTED_KEY) || "");
-    setSelectedPolicyBId(window.localStorage.getItem(POLICY_B_SELECTED_KEY) || "");
-  }, []);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    if (selectedPolicyAId) window.localStorage.setItem(POLICY_A_SELECTED_KEY, selectedPolicyAId);
-    else window.localStorage.removeItem(POLICY_A_SELECTED_KEY);
-  }, [selectedPolicyAId]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    if (selectedPolicyBId) window.localStorage.setItem(POLICY_B_SELECTED_KEY, selectedPolicyBId);
-    else window.localStorage.removeItem(POLICY_B_SELECTED_KEY);
-  }, [selectedPolicyBId]);
 
   const onRunSimulation = useCallback(async () => {
     if (!scenarioId) return;
@@ -2757,17 +3262,17 @@ export default function Page() {
   // - uses only existing endpoints (createScenario, putPortfolio/Constraints/Regime/Inflow, runTick)
   // - exactly one tick
   // - does NOT affect main scenario/ticks
-    const runOneOffPolicyTick = useCallback(
-      async (policy: AllocationPolicy): Promise<Tick> => {
-        const pf = portfolioDraft ?? { assets: [] };
-        const inflow = inflowDraft ?? null;
+  const runOneOffPolicyTick = useCallback(
+    async (policy: AllocationPolicy): Promise<Tick> => {
+      const pf = portfolioDraft ?? { assets: [] };
+      const inflow = inflowDraft ?? null;
 
       const constraintsToUse: Constraints = policy.constraints ?? {};
 
       // CHANGE: filter regime keys exactly like normal flow (no new fields, no local-only keys)
       const regimeToUse: Record<string, unknown> = pickOutgoingRegimeForPolicy(policy);
 
-      const created = await createScenario();
+      const created = await createScenario({ mode: "protocol" });
       const tempScenarioId = parseScenarioIdFromCreate(created);
       if (!tempScenarioId) throw new Error("createScenario did not return a scenario id");
 
@@ -2779,12 +3284,12 @@ export default function Page() {
       await putRegime(tempScenarioId, regimeToUse);
       if (inflow !== null) await putInflow(tempScenarioId, { capital_inflow_amount: Number(inflow ?? 0) });
 
-        const createdTickUnknown: unknown = await runTick(tempScenarioId, {
-          decision_type: runDecisionType,
-          allocator_version: allocatorToUse,
-          policy_id: policy.id,
-          policy_name: policy.name,
-        });
+      const createdTickUnknown: unknown = await runTick(tempScenarioId, {
+        decision_type: runDecisionType,
+        allocator_version: allocatorToUse,
+        policy_id: policy.id,
+        policy_name: policy.name,
+      });
 
       let createdTick: Tick | null = normalizeTickForList(
         createdTickUnknown && typeof createdTickUnknown === "object" ? (createdTickUnknown as Tick) : null
@@ -2855,11 +3360,11 @@ export default function Page() {
         outputB: outB,
         ...(SHOW_DEV_AB_REQUEST_PREVIEW
           ? {
-              devRequests: {
-                A: { portfolio: portfolioDraft, constraints: selectedPolicyA.constraints ?? {}, regime: (selectedPolicyA.regime ?? {}) as Record<string, unknown>, inflow: inflowDraft ?? null },
-                B: { portfolio: portfolioDraft, constraints: selectedPolicyB.constraints ?? {}, regime: (selectedPolicyB.regime ?? {}) as Record<string, unknown>, inflow: inflowDraft ?? null },
-              },
-            }
+            devRequests: {
+              A: { portfolio: portfolioDraft, constraints: selectedPolicyA.constraints ?? {}, regime: (selectedPolicyA.regime ?? {}) as Record<string, unknown>, inflow: inflowDraft ?? null },
+              B: { portfolio: portfolioDraft, constraints: selectedPolicyB.constraints ?? {}, regime: (selectedPolicyB.regime ?? {}) as Record<string, unknown>, inflow: inflowDraft ?? null },
+            },
+          }
           : {}),
       };
 
@@ -2871,7 +3376,7 @@ export default function Page() {
     } finally {
       setLoading(false);
     }
-  }, [selectedPolicyA, selectedPolicyB, portfolioDraft, inflowDraft, runOneOffPolicyTick]);
+  }, [selectedPolicyA, selectedPolicyB, portfolioDraft, inflowDraft, runOneOffPolicyTick, SHOW_DEV_AB_REQUEST_PREVIEW]);
 
   // NEW: helper to build rows based on a provided "current weights" snapshot (avoid drift)
   const buildAllocationRowsFromSnapshot = useCallback((current: Record<string, number>, tw: Record<string, number> | null) => {
@@ -2899,6 +3404,14 @@ export default function Page() {
         minHeight: "100vh", // NEW: ensure black fills the viewport
         margin: "0 auto",
       } as React.CSSProperties,
+      stickyHeader: {
+        position: "sticky",
+        top: 0,
+        zIndex: 50,
+        background: "#000",
+        padding: "12px 0",
+        borderBottom: "1px solid rgba(255,255,255,0.08)",
+      } as React.CSSProperties,
       sectionCard: {
         background: "#101010", // CHANGED: dark grey containers
         border: "0px solid rgba(255,255,255,0.08)",
@@ -2915,78 +3428,88 @@ export default function Page() {
     []
   );
 
-  // NEW: fetch /api/aaa/me to trigger server-side auth + sqlite upsert and surface the result in the UI.
-  const [meInfo, setMeInfo] = useState<Record<string, unknown> | null>(null);
-  const [meError, setMeError] = useState<string | null>(null);
-
-  useEffect(() => {
-    // do a no-store fetch so we always invoke server auth logic
-    (async () => {
-      try {
-        const resp = await fetch("/api/aaa/me", {
-          method: "GET",
-          cache: "no-store",
-          credentials: "include", // ensure cookies (session) are sent to server
-          headers: { Accept: "application/json", "X-Client-Origin": "browser" },
-        });
-        if (!resp.ok) {
-          const t = await resp.text().catch(() => "");
-          setMeError(`Status ${resp.status}: ${t}`);
-          setMeInfo(null);
-          return;
-        }
-        const j = await resp.json().catch(() => null);
-        setMeInfo(j);
-        setMeError(null);
-      } catch (e: unknown) {
-        const msg = e instanceof Error ? e.message : String(e);
-        setMeError(msg);
-        setMeInfo(null);
-      }
-    })();
-    // run once on mount
-  }, []);
-
   // NEW: logout handler — POST to /auth/logout then navigate to root
   const onLogout = useCallback(async () => {
-    try {
-      await fetch("/auth/logout", {
-        method: "GET",
-      });
-    } catch {
-      // ignore errors - still redirect below
-    }
-    if (typeof window !== "undefined") {
-      window.location.assign("/");
-    }
+    window.location.assign("/auth/logout");
   }, []);
+
+  const authorityTierLabel = useMemo(() => {
+    const level = authorityLevel ?? 0;
+    if(level == 0) {
+      return "Observer";
+    }
+    if(level == 1) {
+      return "Sandbox";
+    }
+    if(level == 2) {
+      return "Production";
+    }
+    if(level >= 3) {
+      return "Doctrine";
+    }
+    return `${level}`;
+  }, [authorityLevel]);
+
+  if (meInfo === null) return null;
 
   return (
     <div style={styles.page}>
       {/* Header stays outside cards */}
-      <header style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, flexWrap: "wrap" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <Image src="/logo.png" alt="Sagitta AAA logo" width={50} height={50} priority />
-        </div>
-        <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
-          <button
-            onClick={onLogout}
-            title="Logout and return to root"
-            style={{
-              background: "transparent",
-              border: "1px solid rgba(255,255,255,0.06)",
-              color: "#cbe8ff",
-              padding: "6px 10px",
-              borderRadius: 6,
-            }}
-          >
-            Logout
-          </button>
+      <header style={styles.stickyHeader}>
+        <div style={{ display: "grid", gridTemplateColumns: "auto 1fr auto", alignItems: "center", gap: 16 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <Image
+              src="/logo.png"
+              alt="Sagitta AAA logo"
+              width={50}
+              height={50}
+              priority
+              style={{ cursor: "pointer" }}
+              onClick={() => {
+                if (typeof window !== "undefined") window.location.assign("/");
+              }}
+            />
+          </div>
+          <div style={{ textAlign: "center", minWidth: 0 }}>
+            <div style={{ fontSize: 11, color: "#7aa1c2", letterSpacing: 0.6 }}>Current Authority</div>
+            <div style={{ fontSize: 14, fontWeight: 600, color: "#cbe8ff" }}>{authorityTierLabel}</div>
+          </div>
+          <div style={{ justifySelf: "end", display: "flex", gap: 8, alignItems: "center" }}>
+            {(authorityLevel ?? 0) > 0 ? (
+              <button
+                onClick={onLogout}
+                title="Logout and return to root"
+                style={{
+                  background: "transparent",
+                  border: "1px solid rgba(255,255,255,0.06)",
+                  color: "#cbe8ff",
+                  padding: "6px 10px",
+                  borderRadius: 6,
+                }}
+              >
+                Sign Out
+              </button>
+            ) : (
+              <button
+                onClick={onLogout}
+                title="Logout and return to root"
+                style={{
+                  background: "transparent",
+                  border: "1px solid rgba(255,255,255,0.06)",
+                  color: "#cbe8ff",
+                  padding: "6px 10px",
+                  borderRadius: 6,
+                }}
+              >
+                Exit
+              </button>
+            )}
+          </div>
         </div>
       </header>
 
-      {/* NEW: render me info (if present) to help confirm sqlite upsert and authority */}
-      <div style={{ margin: "8px 0", padding: 8, borderRadius: 8, background: "#0b1220", color: "#cbe8ff", display: "none" }}>
+      {/* NEW: render me info (if present) to help confirm sqlite upsert and authority 
+      <div style={{ margin: "8px 0", padding: 8, borderRadius: 8, background: "#0b1220", color: "#cbe8ff", display: "block" }}>
         <strong>User info (from /api/aaa/me):</strong>
         <div style={{ marginTop: 6, fontSize: 13, color: "#9fbdd8" }}>
           {meError ? (
@@ -2998,35 +3521,76 @@ export default function Page() {
           )}
         </div>
       </div>
+      */}
 
-      {/* REMOVE: the current header block that shows "Mode" + selector */}
-      {/* <header> ... Mode select ... </header> */}
-
-      {/* CHANGE: remove <hr/> dividers; use stacked rounded containers */}
       <div style={styles.stack}>
-      <div style={{ height: 12 }} />
+        <div style={{ height: 12 }} />
         <section style={styles.sectionCard}>
           {/* Session */}
           <section style={{ marginTop: 10 }}>
-          <h2 style={{ marginBottom: 6 }}>Sagitta Autonomous Allocation Agent</h2>
-          
-          <div style={{ color: "#666", fontSize: 13 }}>
-            Define Portfolio → Set Allocation Policy → {analysisMode ? "Run A/B" : "Execute Allocation Decision"}
-          </div>
-          <hr style={styles.hr} />
-          <div style={{ height: 12 }} />
-            <strong>Session:</strong> {scenarioId || "loading..."} {loading ? <span style={{ marginLeft: 8 }}>loading...</span> : null}
-          </section>
+            <h2 style={{ marginBottom: 6 }}>Sagitta Autonomous Allocation Agent</h2>
 
+            <div style={{ color: "#666", fontSize: 13 }}>
+              Define Portfolio → Set Allocation Policy → {analysisMode ? "Run A/B" : "Execute Allocation Decision"}
+            </div>
+            <hr style={styles.hr} />
+            <div style={{ height: 12 }} />
+
+            <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+              {isObserver ? (
+                <span style={{ color: "#aaa", fontSize: 12 }}>Observer Authority — Read Only</span>
+              ) : (
+                <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span>Scenario</span>
+                  <select
+                    value={scenarioId ?? ""}
+                    onChange={(e) => {
+                      const id = e.target.value;
+                      if (!id || id === scenarioId) return;
+                      setScenarioId(id);
+                    }}
+                    style={{ minWidth: 260 }}
+                    disabled={!scenariosLoaded || scenarios.length === 0}
+                  >
+                    <option value="">
+                      {scenariosLoaded
+                        ? scenarios.length
+                          ? "(Select scenario)"
+                          : "(No scenarios yet)"
+                        : "Loading scenarios..."}
+                    </option>
+                    {scenarios.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.label}
+                        {s.updatedAt ? ` ${EM_DASH} ${new Date(s.updatedAt).toLocaleString()}` : ""}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              <span style={{ color: "#9fbdd8", fontSize: 12 }}>
+                <strong>Scenario ID:</strong> {scenarioId || (scenariosLoaded ? "—" : "loading…")}
+              </span>
+              {loading ? <span style={{ fontSize: 12, color: "#9fbdd8" }}>loading…</span> : null}
+            </div>
+          </section>
           <div style={{ height: 12 }} />
-          <button
-            onClick={newScenario}
-            disabled={loading || isCreating}
-            title={loading || isCreating ? "Creating..." : "Create new scenario"}
-          >
-            {loading || isCreating ? "Creating…" : "New Decision Session"}
-          </button>
-          <hr style={styles.hr} />
+          {(authorityLevel ?? 0) > 0 ? (
+            <button
+              onClick={() => newScenario()}
+              disabled={loading || isCreating}
+              title={loading || isCreating ? "Creating..." : "Create new scenario"}
+            >
+              {loading || isCreating ? "Creating…" : "New Scenario"}
+            </button>
+          ) : (
+            <button
+              onClick={purchaseSandbox}
+            >
+              Request Sandbox Authority
+            </button>
+          )}
+        <hr style={styles.hr} />
         </section>
 
         <section style={styles.sectionCard}>
@@ -3034,14 +3598,15 @@ export default function Page() {
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
             <div>
               <h2 style={{ marginBottom: 6 }}>Portfolio</h2>
-              
+
               <div style={{ color: "#666", fontSize: 13 }}>
                 Facts only: define assets and base beliefs used by the allocator.
               </div>
-              
+
             </div>
 
             {/* NEW: right-aligned portfolio actions */}
+            { (authorityLevel ?? 0) > 0 && (
             <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
               <input
                 value={portfolioNameDraft}
@@ -3055,7 +3620,18 @@ export default function Page() {
                 onChange={(e) => {
                   const id = e.target.value;
                   setSelectedSavedPortfolioId(id);
-                  if (id) loadSavedPortfolio(id);
+                  if (id) {
+                    loadSavedPortfolio(id);
+                  } else if (scenarioId) {
+                    void (async () => {
+                      try {
+                        await setScenarioActive(scenarioId, { active_portfolio_id: null });
+                        setScenarioActivePortfolioId(null);
+                      } catch (err) {
+                        console.error("Failed to clear active portfolio", err);
+                      }
+                    })();
+                  }
                 }}
                 style={{ minWidth: 240 }}
               >
@@ -3077,23 +3653,24 @@ export default function Page() {
                 Save
               </button>
             </div>
+            ) }
           </div>
           <hr style={styles.hr} />
           {/* NEW: spacing row beneath action buttons */}
           <div style={{ height: 12 }} />
 
           {/* NEW: Portfolio table + inline add row */}
-          <div style={{ overflowX: "auto" }}>
+          <div style={{ }}>
             <table className="portfolio-table" style={{ width: "100%" }}>
               <colgroup>
                 <col style={{ width: "6%" }} />
-                <col style={{ width: "19%" }} />
-                <col style={{ width: "20%" }} />
-                <col style={{ width: "12%" }} />
-                <col style={{ width: "12%" }} />
+                <col style={{ width: "15%" }} />
+                <col style={{ width: "15%" }} />
+                <col style={{ width: "10%" }} />
+                <col style={{ width: "10%" }} />
                 <col style={{ width: "10%" }} />
                 <col style={{ width: "9%" }} />
-                <col style={{ width: "12%" }} />
+                <col style={{ width: "10%" }} />
               </colgroup>
               <thead>
                 <tr>
@@ -3176,15 +3753,20 @@ export default function Page() {
                 {(portfolioDraft?.assets ?? []).map((a, idx) => (
                   <tr key={`${a.id}-${idx}`}>
                     <td>
-                      <input value={a.id} onChange={(e) => onAssetChange(idx, { id: e.target.value })} />
+                      <input value={a.id} onChange={(e) => onAssetChange(idx, { id: e.target.value })} 
+                      disabled={authorityLevel === 0}
+                      />
                     </td>
                     <td>
-                      <input value={a.name} onChange={(e) => onAssetChange(idx, { name: e.target.value })} />
+                      <input value={a.name} onChange={(e) => onAssetChange(idx, { name: e.target.value })} 
+                      disabled={authorityLevel === 0}
+                      />
                     </td>
                     <td>
                       <select
                         value={(a.risk_class ?? "") as string}
                         onChange={(e) => onAssetChange(idx, { risk_class: (e.target.value as RiskClass) || undefined })}
+                        disabled={authorityLevel === 0}
                       >
                         <option value="">{humanizeOption("(none)")}</option>
                         <option value="stablecoin">{humanizeOption("stablecoin")}</option>
@@ -3216,6 +3798,7 @@ export default function Page() {
                       <select
                         value={(a.role ?? "satellite") as string}
                         onChange={(e) => onAssetChange(idx, { role: e.target.value as AssetRole })}
+                        disabled={authorityLevel === 0}
                       >
                         {ROLE_OPTIONS.map((opt) => (
                           <option key={`role_${opt}`} value={opt}>
@@ -3232,6 +3815,7 @@ export default function Page() {
                         max={1}
                         value={Number.isFinite(a.current_weight) ? a.current_weight : 0}
                         onChange={(e) => onAssetChange(idx, { current_weight: Number(e.target.value) })}
+                        disabled={authorityLevel === 0}
                       />
                     </td>
                     <td>
@@ -3240,6 +3824,7 @@ export default function Page() {
                         step="0.01"
                         value={Number.isFinite(a.expected_return) ? a.expected_return : 0}
                         onChange={(e) => onAssetChange(idx, { expected_return: Number(e.target.value) })}
+                        disabled={authorityLevel === 0}
                       />
                     </td>
                     <td>
@@ -3248,10 +3833,11 @@ export default function Page() {
                         step="0.01"
                         value={Number.isFinite(a.volatility) ? a.volatility : 0}
                         onChange={(e) => onAssetChange(idx, { volatility: Number(e.target.value) })}
+                        disabled={authorityLevel === 0}
                       />
                     </td>
                     <td>
-                      <button onClick={() => removeAsset(idx)} disabled={loading}>
+                      <button onClick={() => removeAsset(idx)} disabled={loading || authorityLevel === 0}>
                         Remove
                       </button>
                     </td>
@@ -3261,6 +3847,7 @@ export default function Page() {
                 <tr><td colSpan={8}>&nbsp;</td></tr>
 
                 {/* Inline add row */}
+                { (authorityLevel ?? 0) > 0 && (
                 <tr>
                   <td>
                     <input
@@ -3354,6 +3941,7 @@ export default function Page() {
                     </button>
                   </td>
                 </tr>
+                ) }
               </tbody>
             </table>
           </div>
@@ -3365,17 +3953,33 @@ export default function Page() {
         <section style={styles.sectionCard}>
           {/* Allocation Policy */}
           <h2>Allocation Policy</h2>
-          
+
           <div style={{ color: "#666", fontSize: 13, marginBottom: 12 }}>
             Rules (constraints) and Decision Context (regime). No asset duplication here.
           </div>
           <hr style={styles.hr} />
+          { (authorityLevel ?? 0) > 0 && (
           <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
             <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <span>Saved Policy</span>
               <select
                 value={selectedPolicyId ?? ""}
-                onChange={(e) => setSelectedPolicyId(e.target.value || null)}
+                onChange={(e) => {
+                  const id = e.target.value;
+                  setSelectedPolicyId(id || null);
+                  if (id) {
+                    loadSavedPolicy(id);
+                  } else if (scenarioId) {
+                    void (async () => {
+                      try {
+                        await setScenarioActive(scenarioId, { active_policy_id: null });
+                        setScenarioActivePolicyId(null);
+                      } catch (err) {
+                        console.error("Failed to clear active policy", err);
+                      }
+                    })();
+                  }
+                }}
                 style={{ minWidth: 260 }}
               >
                 <option value="">(Unsaved Policy)</option>
@@ -3404,8 +4008,9 @@ export default function Page() {
               New Allocation Policy
             </button>
           </div>
+          ) }
 
-          {/* NEW: allocator version selector moved here (above constraints/regime row) */}
+          {/* allocator version selector moved here (above constraints/regime row) */}
           <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
             <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <span>Allocator Version</span>
@@ -3413,14 +4018,22 @@ export default function Page() {
                 value={allocatorVersion}
                 onChange={(e) => setAllocatorVersion(e.target.value as AllocatorVersion)}
                 style={{ minWidth: 180 }}
+                disabled={authorityLevel === 0}
               >
-                <option value="default">default</option>
                 <option value="v1">v1</option>
+                { (authorityLevel ?? 0) > 0 && (
                 <option value="v2">v2</option>
+                )}
+                { (authorityLevel ?? 0) > 1 && (
                 <option value="v3">v3</option>
+                )}
+                { (authorityLevel ?? 0) > 2 && (
+                  <>
                 <option value="v4">v4</option>
                 <option value="v5">v5</option>
                 <option value="v6">v6</option>
+                  </>
+                )}
               </select>
             </label>
 
@@ -3473,6 +4086,7 @@ export default function Page() {
                       setConstraintsTouched(true);
                     }}
                     style={{ marginLeft: 8 }}
+                    disabled={authorityLevel === 0}
                   />
                 </label>
 
@@ -3511,6 +4125,7 @@ export default function Page() {
                       setConstraintsTouched(true);
                     }}
                     style={{ marginLeft: 8 }}
+                    disabled={authorityLevel === 0}
                   />
                 </label>
 
@@ -3549,6 +4164,7 @@ export default function Page() {
                       setConstraintsTouched(true);
                     }}
                     style={{ marginLeft: 8 }}
+                    disabled={authorityLevel === 0}
                   />
                 </label>
 
@@ -3567,7 +4183,7 @@ export default function Page() {
             <div style={{ flex: "1.6 1 420px", minWidth: 420 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
                 <h3 style={{ margin: 0 }}>Decision Context (Regime)</h3>
-                <button onClick={resetRegimeToVersionDefaults} disabled={loading}>
+                <button onClick={resetRegimeToVersionDefaults} disabled={loading || authorityLevel === 0}>
                   Reset to version defaults
                 </button>
               </div>
@@ -3592,141 +4208,141 @@ export default function Page() {
                   {(REGIME_FIELDS_BY_ALLOCATOR[selectedAllocatorSchemaVersion] ?? []).map((f) => {
                     const v = (regimeDraft ?? {})[f.key];
 
-                  if (f.input === "select") {
-                    const safe = sanitizeSelect(v, f.options, f.defaultValue);
-                    return (
-                      <label
-                        key={f.key}
-                        title={f.description}
-                        style={{ display: "flex", flexDirection: "column", gap: 6 }}
-                      >
-                        <span
-                          className="tooltip"
-                          data-tooltip={f.description || ""}
-                          aria-label={f.description || ""}
-                          tabIndex={0}
+                    if (f.input === "select") {
+                      const safe = sanitizeSelect(v, f.options, f.defaultValue);
+                      return (
+                        <label
+                          key={f.key}
+                          title={f.description}
+                          style={{ display: "flex", flexDirection: "column", gap: 6 }}
                         >
-                          {f.label}
-                        </span>
-                        <select
-                          value={String(safe ?? "")}
-                          onChange={(e) => {
-                            const next = sanitizeSelect(e.target.value, f.options, f.defaultValue);
-                            setRegimeDraft((r) => ({ ...(r ?? {}), [f.key]: next }));
-                            setRegimeTouched(true);
-                          }}
-                        >
-                          {(f.options ?? []).map((opt) => (
-                            <option key={opt} value={opt}>
-                              {humanizeOption(opt)}
-                            </option>
-                          ))}
-                        </select>
-                        {/* optional: you can remove the small description if tooltip is enough */}
-                        <small style={{ color: "#666" }}>{f.description}</small>
-                      </label>
-                    );
-                  }
-
-                  if (f.input === "number") {
-                    const safe = sanitizeNumber(v, { min: f.min, max: f.max }, Number(f.defaultValue ?? 0));
-                    return (
-                      <label
-                        key={f.key}
-                        title={f.description}
-                        style={{ display: "flex", flexDirection: "column", gap: 6 }}
-                      >
-                        <span
-                          className="tooltip"
-                          data-tooltip={f.description || ""}
-                          aria-label={f.description || ""}
-                          tabIndex={0}
-                        >
-                          {f.label}
-                        </span>
-                        <input
-                          type="number"
-                          step={typeof f.step === "number" ? f.step : "any"}
-                          value={safe}
-                          onChange={(e) => {
-                            const next = sanitizeNumber(e.target.value, { min: f.min, max: f.max }, Number(f.defaultValue ?? 0));
-                            setRegimeDraft((r) => ({ ...(r ?? {}), [f.key]: next }));
-                            setRegimeTouched(true);
-                          }}
-                        />
-                        <small style={{ color: "#666" }}>{f.description}</small>
-                      </label>
-                    );
-                  }
-
-                  if (f.input === "toggle") {
-                    const checked = Boolean(typeof v === "boolean" ? v : f.defaultValue);
-                    return (
-                      <label
-                        key={f.key}
-                        title={f.description}
-                        style={{ display: "flex", flexDirection: "column", gap: 6 }}
-                      >
-                        <span
-                          className="tooltip"
-                          data-tooltip={f.description || ""}
-                          aria-label={f.description || ""}
-                          tabIndex={0}
-                        >
-                          {f.label}
-                        </span>
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          onChange={(e) => {
-                            setRegimeDraft((r) => ({ ...(r ?? {}), [f.key]: e.target.checked }));
-                            setRegimeTouched(true);
-                          }}
-                        />
-                        <small style={{ color: "#666" }}>{f.description}</small>
-                      </label>
-                    );
-                  }
-
-                  if (f.input === "json") {
-                    const jsonText = JSON.stringify(v ?? f.defaultValue ?? {}, null, 2);
-                    return (
-                      <label
-                        key={f.key}
-                        title={f.description}
-                        style={{
-                          display: "flex",
-                          flexDirection: "column",
-                          gap: 6,
-                          gridColumn: "1 / -1", // JSON spans both columns
-                        }}
-                      >
-                        <span
-                          className="tooltip"
-                          data-tooltip={f.description || ""}
-                          aria-label={f.description || ""}
-                          tabIndex={0}
-                        >
-                          {f.label}
-                        </span>
-                        <textarea
-                          rows={6}
-                          value={jsonText}
-                          onChange={(e) => {
-                            try {
-                              const parsed = JSON.parse(e.target.value || "null");
-                              setRegimeDraft((r) => ({ ...(r ?? {}), [f.key]: parsed }));
+                          <span
+                            className="tooltip"
+                            data-tooltip={f.description || ""}
+                            aria-label={f.description || ""}
+                            tabIndex={0}
+                          >
+                            {f.label}
+                          </span>
+                          <select
+                            value={String(safe ?? "")}
+                            onChange={(e) => {
+                              const next = sanitizeSelect(e.target.value, f.options, f.defaultValue);
+                              setRegimeDraft((r) => ({ ...(r ?? {}), [f.key]: next }));
                               setRegimeTouched(true);
-                              setRegimeError(null);
-                            } catch {
-                              setRegimeError(`${f.key} must be valid JSON`);
-                            }
+                            }}
+                          >
+                            {(f.options ?? []).map((opt) => (
+                              <option key={opt} value={opt}>
+                                {humanizeOption(opt)}
+                              </option>
+                            ))}
+                          </select>
+                          {/* optional: you can remove the small description if tooltip is enough */}
+                          <small style={{ color: "#666" }}>{f.description}</small>
+                        </label>
+                      );
+                    }
+
+                    if (f.input === "number") {
+                      const safe = sanitizeNumber(v, { min: f.min, max: f.max }, Number(f.defaultValue ?? 0));
+                      return (
+                        <label
+                          key={f.key}
+                          title={f.description}
+                          style={{ display: "flex", flexDirection: "column", gap: 6 }}
+                        >
+                          <span
+                            className="tooltip"
+                            data-tooltip={f.description || ""}
+                            aria-label={f.description || ""}
+                            tabIndex={0}
+                          >
+                            {f.label}
+                          </span>
+                          <input
+                            type="number"
+                            step={typeof f.step === "number" ? f.step : "any"}
+                            value={safe}
+                            onChange={(e) => {
+                              const next = sanitizeNumber(e.target.value, { min: f.min, max: f.max }, Number(f.defaultValue ?? 0));
+                              setRegimeDraft((r) => ({ ...(r ?? {}), [f.key]: next }));
+                              setRegimeTouched(true);
+                            }}
+                          />
+                          <small style={{ color: "#666" }}>{f.description}</small>
+                        </label>
+                      );
+                    }
+
+                    if (f.input === "toggle") {
+                      const checked = Boolean(typeof v === "boolean" ? v : f.defaultValue);
+                      return (
+                        <label
+                          key={f.key}
+                          title={f.description}
+                          style={{ display: "flex", flexDirection: "column", gap: 6 }}
+                        >
+                          <span
+                            className="tooltip"
+                            data-tooltip={f.description || ""}
+                            aria-label={f.description || ""}
+                            tabIndex={0}
+                          >
+                            {f.label}
+                          </span>
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={(e) => {
+                              setRegimeDraft((r) => ({ ...(r ?? {}), [f.key]: e.target.checked }));
+                              setRegimeTouched(true);
+                            }}
+                          />
+                          <small style={{ color: "#666" }}>{f.description}</small>
+                        </label>
+                      );
+                    }
+
+                    if (f.input === "json") {
+                      const jsonText = JSON.stringify(v ?? f.defaultValue ?? {}, null, 2);
+                      return (
+                        <label
+                          key={f.key}
+                          title={f.description}
+                          style={{
+                            display: "flex",
+                            flexDirection: "column",
+                            gap: 6,
+                            gridColumn: "1 / -1", // JSON spans both columns
                           }}
-                        />
-                        <small style={{ color: "#666" }}>{f.description}</small>
-                      </label>
-                    );
-                  }
+                        >
+                          <span
+                            className="tooltip"
+                            data-tooltip={f.description || ""}
+                            aria-label={f.description || ""}
+                            tabIndex={0}
+                          >
+                            {f.label}
+                          </span>
+                          <textarea
+                            rows={6}
+                            value={jsonText}
+                            onChange={(e) => {
+                              try {
+                                const parsed = JSON.parse(e.target.value || "null");
+                                setRegimeDraft((r) => ({ ...(r ?? {}), [f.key]: parsed }));
+                                setRegimeTouched(true);
+                                setRegimeError(null);
+                              } catch {
+                                setRegimeError(`${f.key} must be valid JSON`);
+                              }
+                            }}
+                          />
+                          <small style={{ color: "#666" }}>{f.description}</small>
+                        </label>
+                      );
+                    }
 
                     return null;
                   })}
@@ -3748,7 +4364,7 @@ export default function Page() {
         <section style={styles.sectionCard}>
           {/* Run Decision */}
           <h2>Run Decision</h2>
-          
+
           {/* CHANGE: accurate description */}
           <div style={{ color: "#666", fontSize: 13, marginBottom: 12 }}>
             {runDecisionType === "simulation"
@@ -3778,7 +4394,7 @@ export default function Page() {
             {/* NEW: spacer pushes toggle to the right */}
             <div style={{ marginLeft: "auto" }} />
 
-            {runDecisionType !== "simulation" ? (
+            {runDecisionType !== "simulation" && authorityLevel !== 0 ? (
               <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <span>Analysis A/B Mode</span>
                 <input
@@ -3799,7 +4415,7 @@ export default function Page() {
                   <select
                     value={simTickCount}
                     onChange={(e) => setSimTickCount(Number(e.target.value))}
-                    disabled={loading}
+                    disabled={loading || authorityLevel === 0}
                     style={{ minWidth: 90 }}
                   >
                     <option value={5}>5</option>
@@ -3820,7 +4436,7 @@ export default function Page() {
                 }}
               >
                 <div style={{ fontWeight: 600, marginBottom: 6 }}>Risk Class Regimes</div>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 8 }}>
+                <div style={{ display: "grid", gap: 8 }}>
                   {simRiskClasses.map((rc) => (
                     <label key={`sim_rc_${rc}`} style={{ display: "flex", alignItems: "center", gap: 8 }}>
                       <span style={{ minWidth: 120 }}>{humanizeOption(rc)}</span>
@@ -3829,7 +4445,7 @@ export default function Page() {
                         onChange={(e) =>
                           setSimRiskClassRegimes((prev) => ({ ...prev, [rc]: e.target.value as SimRegime }))
                         }
-                        disabled={loading}
+                        disabled={loading || authorityLevel === 0}
                       >
                         <option value="bull">Bull</option>
                         <option value="bear">Bear</option>
@@ -3853,7 +4469,7 @@ export default function Page() {
                       value={selectedPolicyAId}
                       onChange={(e) => setSelectedPolicyAId(e.target.value)}
                       style={{ width: "100%" }}
-                      disabled={loading}
+                      disabled={loading || authorityLevel === 0}
                     >
                       <option value="">(use current policy draft)</option>
                       {policies.map((p) => (
@@ -3880,7 +4496,7 @@ export default function Page() {
                       value={selectedPolicyBId}
                       onChange={(e) => setSelectedPolicyBId(e.target.value)}
                       style={{ width: "100%" }}
-                      disabled={loading}
+                      disabled={loading || authorityLevel === 0}
                     >
                       <option value="">(none)</option>
                       {policies.map((p) => (
@@ -3926,12 +4542,12 @@ export default function Page() {
               !analysisMode && runDecisionType !== "simulation"
                 ? { display: "flex", justifyContent: "center", marginTop: 10 }
                 : {
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: 10,
-                    marginTop: 10,
-                    alignItems: "center",
-                  }
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 10,
+                  marginTop: 10,
+                  alignItems: "center",
+                }
             }
           >
             {runDecisionType === "simulation" ? (
@@ -4017,7 +4633,7 @@ export default function Page() {
                       Different allocator authorities detected (A: {displayAllocatorVersion(selectedPolicyA?.allocatorVersion)}, B: {displayAllocatorVersion(selectedPolicyB?.allocatorVersion)})
                     </div>
                     <div style={{ fontSize: 12, marginTop: 4, opacity: 0.9 }}>
-                    Outcomes reflect differences in decision logic and enforcement scope.
+                      Outcomes reflect differences in decision logic and enforcement scope.
                     </div>
                   </div>
                 ) : null}
@@ -4246,15 +4862,16 @@ export default function Page() {
           ) : !analysisMode ? (
             <>
               <section>
-                <h2>Allocation Results</h2>
+                <h2>Decision Ledger</h2>
                 <hr style={styles.hr} />
                 {ticksForTable.length === 0 ? (
-                  <div style={{ color: "#666", fontSize: 13 }}>No allocation results yet. Click Execute Allocation Decision.</div>
+                  <div style={{ color: "#666", fontSize: 13 }}>No decision records yet. Click Execute Allocation Decision.</div>
                 ) : (
                   <div style={{ overflowX: "auto" }}>
                     <table style={{ width: "100%", borderCollapse: "collapse" }}>
                       <thead>
                         <tr>
+                          <th style={{ textAlign: "left", color: "#fff" }}>Decision ID</th>
                           <th style={{ textAlign: "left", color: "#fff" }}>Timestamp</th>
                           <th style={{ textAlign: "left", color: "#fff" }}>Portfolio</th>
                           <th style={{ textAlign: "left", color: "#fff" }}>Policy</th>
@@ -4269,47 +4886,41 @@ export default function Page() {
                           const priorWeights = getPriorWeightsFromTick(t);
                           const { rows } = buildAllocationRowsFromPrior(priorWeights, tw);
                           const analysis = getAnalysisSummaryFromTick(t);
-                          const roleEffects = getRoleEffectsFromTick(t);
-                          const roleStatus =
-                            typeof roleEffects?.["status"] === "string" ? (roleEffects?.["status"] as string) : null;
-                          const dominanceLabel =
-                            roleStatus === "applied"
-                              ? "Core Dominance: Applied"
-                              : roleStatus === "blocked_by_constraints"
-                              ? "Core Dominance: Blocked"
-                              : null;
                           const churnPct =
                             analysis && typeof analysis["churn_pct"] === "number" ? (analysis["churn_pct"] as number) : null;
                           const expanded = !!t.tick_id && expandedTickIds.has(t.tick_id);
                           const explainOpen = !!t.tick_id && expandedExplainIds.has(t.tick_id);
                           const explainPending = !!t.tick_id && explainPendingIds.has(t.tick_id);
+                          const runId = t.tick_id || "";
 
                           return (
                             <React.Fragment key={t.tick_id || t.timestamp}>
                               <tr>
+                                <td style={{ whiteSpace: "nowrap", maxWidth: 220 }}>
+                                  <span
+                                    title={runId || "—"}
+                                    style={{
+                                      display: "inline-block",
+                                      maxWidth: 200,
+                                      overflow: "hidden",
+                                      textOverflow: "ellipsis",
+                                      fontFamily: "monospace",
+                                      fontSize: 12,
+                                      color: "#9fbdd8",
+                                      verticalAlign: "bottom",
+                                    }}
+                                  >
+                                    {runId || "—"}
+                                  </span>
+                                </td>
                                 <td style={{ whiteSpace: "nowrap" }}>{formatTs(t.timestamp)}</td>
                                 <td style={{ whiteSpace: "nowrap" }}>{getTickContextLabel(t, "portfolio")}</td>
                                 <td style={{ whiteSpace: "nowrap" }}>{getTickContextLabel(t, "policy")}</td>
                                 <td>
                                   {tw ? (
                                     <span>
-                                      {humanizeLabel("target_weights")}: {Object.keys(tw).length} assets • churn{" "}
+                                      {Object.keys(tw).length} assets • churn{" "}
                                       {churnPct === null ? "—" : `${churnPct.toFixed(2)}%`}
-                                      {dominanceLabel ? (
-                                        <span
-                                          style={{
-                                            marginLeft: 8,
-                                            fontSize: 12,
-                                            color: roleStatus === "blocked_by_constraints" ? "#b45f00" : "#2a7a3a",
-                                            background: roleStatus === "blocked_by_constraints" ? "rgba(245,158,11,0.12)" : "rgba(16,185,129,0.12)",
-                                            border: roleStatus === "blocked_by_constraints" ? "1px solid rgba(245,158,11,0.35)" : "1px solid rgba(16,185,129,0.35)",
-                                            padding: "2px 6px",
-                                            borderRadius: 999,
-                                          }}
-                                        >
-                                          {dominanceLabel}
-                                        </span>
-                                      ) : null}
                                     </span>
                                   ) : (
                                     <span style={{ color: "#666" }}>No {humanizeLabel("target_weights")} in payload</span>
@@ -4319,7 +4930,7 @@ export default function Page() {
                                   <button onClick={() => onExportTick(t)} disabled={loading} style={{ marginLeft: 8 }}>
                                     Export
                                   </button>
-                                  <button onClick={() => onLoadAllocationIntoPortfolio(t)} disabled={loading} style={{ marginLeft: 8 }}>
+                                  <button onClick={() => onLoadAllocationIntoPortfolio(t)} disabled={loading  || authorityLevel === 0} style={{ marginLeft: 8 }}>
                                     Load Allocation
                                   </button>
                                   <button onClick={() => onDeleteTickLocal(t)} disabled={loading} style={{ marginLeft: 8 }}>
@@ -4335,14 +4946,14 @@ export default function Page() {
                               </tr>
 
                               <tr>
-                                <td colSpan={5}>
+                                <td colSpan={6}>
                                   {renderDecisionAnalysisStrip(t)}
                                 </td>
                               </tr>
 
                               {expanded ? (
                                 <tr>
-                                  <td colSpan={5}>
+                                  <td colSpan={6}>
                                     {!tw ? (
                                       <div style={{ color: "#666", fontSize: 13 }}>No target_weights found for this tick.</div>
                                     ) : (
@@ -4444,7 +5055,7 @@ export default function Page() {
                                         </table>
 
                                         <details style={{ marginTop: 10 }}>
-                                          <summary style={{ cursor: "pointer" }}>Raw tick (allocator + analyzer)</summary>
+                                          <summary style={{ cursor: "pointer" }}>Decision Audit (allocator + analyzer)</summary>
                                           <pre style={{ background: "#f8f8f8", padding: 8, color: "black", maxHeight: 300, overflow: "auto" }}>
                                             {JSON.stringify(t, null, 2)}
                                           </pre>
@@ -4531,182 +5142,182 @@ export default function Page() {
                           {isExpanded ? (
                             <>
                               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 12 }}>
-                            {/* Side A */}
-                            <div style={{ border: "1px solid rgba(0,0,0,0.10)", borderRadius: 8, padding: 10 }}>
-                              <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
-                                <div>
-                                  <strong>A:</strong> {r.policyA.name}
-                                  <div style={{ color: "#666", fontSize: 12 }}>allocator: {displayAllocatorVersion(r.policyA.allocatorVersion)}</div>
-                                  <div style={{ color: "#666", fontSize: 12 }}>tick: {formatTs(r.outputA.timestamp)}</div>
-                                </div>
-                                <div style={{ textAlign: "right" }}>
-                                  <div style={{ color: "#666", fontSize: 12 }}>turnover</div>
-                                  <div style={{ fontWeight: 600 }}>{(A.turnover * 100).toFixed(2)}%</div>
-                                </div>
-                              </div>
+                                {/* Side A */}
+                                <div style={{ border: "1px solid rgba(0,0,0,0.10)", borderRadius: 8, padding: 10 }}>
+                                  <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
+                                    <div>
+                                      <strong>A:</strong> {r.policyA.name}
+                                      <div style={{ color: "#666", fontSize: 12 }}>allocator: {displayAllocatorVersion(r.policyA.allocatorVersion)}</div>
+                                      <div style={{ color: "#666", fontSize: 12 }}>tick: {formatTs(r.outputA.timestamp)}</div>
+                                    </div>
+                                    <div style={{ textAlign: "right" }}>
+                                      <div style={{ color: "#666", fontSize: 12 }}>turnover</div>
+                                      <div style={{ fontWeight: 600 }}>{(A.turnover * 100).toFixed(2)}%</div>
+                                    </div>
+                                  </div>
 
-                              <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 10 }}>
-                                <button onClick={() => onExportTick(r.outputA)} disabled={loading}>Export</button>
-                                <button onClick={() => onToggleExplain(r.outputA)} disabled={loading}>
-                                  {explainPendingA ? "Explaining..." : "Explain"}
-                                </button>
-                              </div>
-                              <div style={{ marginTop: 10 }}>
-                                {renderPolicyImpactSection(r.outputA)}
-                              </div>
+                                  <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 10 }}>
+                                    <button onClick={() => onExportTick(r.outputA)} disabled={loading}>Export</button>
+                                    <button onClick={() => onToggleExplain(r.outputA)} disabled={loading}>
+                                      {explainPendingA ? "Explaining..." : "Explain"}
+                                    </button>
+                                  </div>
+                                  <div style={{ marginTop: 10 }}>
+                                    {renderPolicyImpactSection(r.outputA)}
+                                  </div>
 
-                              <div style={{ overflowX: "auto", marginTop: 10 }}>
-                                <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                                  <thead>
-                                    <tr>
-                                      <th style={{ textAlign: "left", color: "#fff" }}>asset</th>
-                                      <th style={{ textAlign: "right", color: "#fff" }}>source</th>
-                                      <th style={{ textAlign: "right", color: "#fff" }}>target</th>
-                                      <th style={{ textAlign: "right", color: "#fff" }}>Δ</th>
-                                      <th style={{ textAlign: "left", color: "#fff" }}>visual</th>
-                                    </tr>
-                                  </thead>
-                                  <tbody>
-                                    {A.rows.map((row) => {
-                                        const tgtPct = Math.max(0, Math.min(1, row.tgt));
-                                        const curPct = Math.max(0, Math.min(1, row.cur));
-                                        const displayTgt = Math.abs(tgtPct) < 0.0001 ? 0 : tgtPct;
-                                        const displayCur = Math.abs(curPct) < 0.0001 ? 0 : curPct;
-                                        const displayDelta = Math.abs(row.delta) < 0.0001 ? 0 : row.delta;
-                                        const deltaPos = displayDelta >= 0;
-
-                                      return (
-                                        <tr key={`A_${r.runId}_${row.id}`}>
-                                          <td>{row.id}</td>
-                                          <td style={{ textAlign: "right" }}>{(displayCur * 100).toFixed(2)}%</td>
-                                          <td style={{ textAlign: "right" }}>{(displayTgt * 100).toFixed(2)}%</td>
-                                          <td style={{ textAlign: "right", color: deltaPos ? "#1b7f3a" : "#b12a2a" }}>
-                                            {(displayDelta * 100).toFixed(2)}%
-                                          </td>
-                                          <td style={{ minWidth: 220 }}>
-                                            <div style={{ position: "relative", height: 10, background: "rgba(255,255,255,0.10)", borderRadius: 6 }}>
-                                              <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: `${displayTgt * 100}%`, background: "rgba(11,42,111,0.85)", borderRadius: 6 }} />
-                                              <div style={{ position: "absolute", left: `${displayCur * 100}%`, top: -2, width: 2, height: 14, background: "rgba(255,255,255,0.85)" }} />
-                                            </div>
-                                          </td>
+                                  <div style={{ overflowX: "auto", marginTop: 10 }}>
+                                    <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                                      <thead>
+                                        <tr>
+                                          <th style={{ textAlign: "left", color: "#fff" }}>asset</th>
+                                          <th style={{ textAlign: "right", color: "#fff" }}>source</th>
+                                          <th style={{ textAlign: "right", color: "#fff" }}>target</th>
+                                          <th style={{ textAlign: "right", color: "#fff" }}>Δ</th>
+                                          <th style={{ textAlign: "left", color: "#fff" }}>visual</th>
                                         </tr>
-                                      );
-                                    })}
-                                  </tbody>
-                                </table>
-                              </div>
-                            </div>
+                                      </thead>
+                                      <tbody>
+                                        {A.rows.map((row) => {
+                                          const tgtPct = Math.max(0, Math.min(1, row.tgt));
+                                          const curPct = Math.max(0, Math.min(1, row.cur));
+                                          const displayTgt = Math.abs(tgtPct) < 0.0001 ? 0 : tgtPct;
+                                          const displayCur = Math.abs(curPct) < 0.0001 ? 0 : curPct;
+                                          const displayDelta = Math.abs(row.delta) < 0.0001 ? 0 : row.delta;
+                                          const deltaPos = displayDelta >= 0;
 
-                            {/* Side B */}
-                            <div style={{ border: "1px solid rgba(0,0,0,0.10)", borderRadius: 8, padding: 10 }}>
-                              <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
-                                <div>
-                                  <strong>B:</strong> {r.policyB.name}
-                                  <div style={{ color: "#666", fontSize: 12 }}>allocator: {displayAllocatorVersion(r.policyB.allocatorVersion)}</div>
-                                  <div style={{ color: "#666", fontSize: 12 }}>tick: {formatTs(r.outputB.timestamp)}</div>
+                                          return (
+                                            <tr key={`A_${r.runId}_${row.id}`}>
+                                              <td>{row.id}</td>
+                                              <td style={{ textAlign: "right" }}>{(displayCur * 100).toFixed(2)}%</td>
+                                              <td style={{ textAlign: "right" }}>{(displayTgt * 100).toFixed(2)}%</td>
+                                              <td style={{ textAlign: "right", color: deltaPos ? "#1b7f3a" : "#b12a2a" }}>
+                                                {(displayDelta * 100).toFixed(2)}%
+                                              </td>
+                                              <td style={{ minWidth: 220 }}>
+                                                <div style={{ position: "relative", height: 10, background: "rgba(255,255,255,0.10)", borderRadius: 6 }}>
+                                                  <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: `${displayTgt * 100}%`, background: "rgba(11,42,111,0.85)", borderRadius: 6 }} />
+                                                  <div style={{ position: "absolute", left: `${displayCur * 100}%`, top: -2, width: 2, height: 14, background: "rgba(255,255,255,0.85)" }} />
+                                                </div>
+                                              </td>
+                                            </tr>
+                                          );
+                                        })}
+                                      </tbody>
+                                    </table>
+                                  </div>
                                 </div>
-                                <div style={{ textAlign: "right" }}>
-                                  <div style={{ color: "#666", fontSize: 12 }}>turnover</div>
-                                  <div style={{ fontWeight: 600 }}>{(B.turnover * 100).toFixed(2)}%</div>
-                                </div>
-                              </div>
 
-                              <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 10 }}>
-                                <button onClick={() => onExportTick(r.outputB)} disabled={loading}>Export</button>
-                                <button onClick={() => onToggleExplain(r.outputB)} disabled={loading}>
-                                  {explainPendingB ? "Explaining..." : "Explain"}
-                                </button>
-                              </div>
-                              <div style={{ marginTop: 10 }}>
-                                {renderPolicyImpactSection(r.outputB)}
-                              </div>
+                                {/* Side B */}
+                                <div style={{ border: "1px solid rgba(0,0,0,0.10)", borderRadius: 8, padding: 10 }}>
+                                  <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
+                                    <div>
+                                      <strong>B:</strong> {r.policyB.name}
+                                      <div style={{ color: "#666", fontSize: 12 }}>allocator: {displayAllocatorVersion(r.policyB.allocatorVersion)}</div>
+                                      <div style={{ color: "#666", fontSize: 12 }}>tick: {formatTs(r.outputB.timestamp)}</div>
+                                    </div>
+                                    <div style={{ textAlign: "right" }}>
+                                      <div style={{ color: "#666", fontSize: 12 }}>turnover</div>
+                                      <div style={{ fontWeight: 600 }}>{(B.turnover * 100).toFixed(2)}%</div>
+                                    </div>
+                                  </div>
 
-                              <div style={{ overflowX: "auto", marginTop: 10 }}>
-                                <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                                  <thead>
-                                    <tr>
-                                      <th style={{ textAlign: "left", color: "#fff" }}>asset</th>
-                                      <th style={{ textAlign: "right", color: "#fff" }}>source</th>
-                                      <th style={{ textAlign: "right", color: "#fff" }}>target</th>
-                                      <th style={{ textAlign: "right", color: "#fff" }}>Δ</th>
-                                      <th style={{ textAlign: "left", color: "#fff" }}>visual</th>
-                                    </tr>
-                                  </thead>
-                                  <tbody>
-                                    {B.rows.map((row) => {
-                                        const tgtPct = Math.max(0, Math.min(1, row.tgt));
-                                        const curPct = Math.max(0, Math.min(1, row.cur));
-                                        const displayTgt = Math.abs(tgtPct) < 0.0001 ? 0 : tgtPct;
-                                        const displayCur = Math.abs(curPct) < 0.0001 ? 0 : curPct;
-                                        const displayDelta = Math.abs(row.delta) < 0.0001 ? 0 : row.delta;
-                                        const deltaPos = displayDelta >= 0;
+                                  <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 10 }}>
+                                    <button onClick={() => onExportTick(r.outputB)} disabled={loading}>Export</button>
+                                    <button onClick={() => onToggleExplain(r.outputB)} disabled={loading}>
+                                      {explainPendingB ? "Explaining..." : "Explain"}
+                                    </button>
+                                  </div>
+                                  <div style={{ marginTop: 10 }}>
+                                    {renderPolicyImpactSection(r.outputB)}
+                                  </div>
 
-                                      return (
-                                        <tr key={`B_${r.runId}_${row.id}`}>
-                                          <td>{row.id}</td>
-                                          <td style={{ textAlign: "right" }}>{(displayCur * 100).toFixed(2)}%</td>
-                                          <td style={{ textAlign: "right" }}>{(displayTgt * 100).toFixed(2)}%</td>
-                                          <td style={{ textAlign: "right", color: deltaPos ? "#1b7f3a" : "#b12a2a" }}>
-                                            {(displayDelta * 100).toFixed(2)}%
-                                          </td>
-                                          <td style={{ minWidth: 220 }}>
-                                            <div style={{ position: "relative", height: 10, background: "rgba(255,255,255,0.10)", borderRadius: 6 }}>
-                                              <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: `${displayTgt * 100}%`, background: "rgba(11,42,111,0.85)", borderRadius: 6 }} />
-                                              <div style={{ position: "absolute", left: `${displayCur * 100}%`, top: -2, width: 2, height: 14, background: "rgba(255,255,255,0.85)" }} />
-                                            </div>
-                                          </td>
+                                  <div style={{ overflowX: "auto", marginTop: 10 }}>
+                                    <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                                      <thead>
+                                        <tr>
+                                          <th style={{ textAlign: "left", color: "#fff" }}>asset</th>
+                                          <th style={{ textAlign: "right", color: "#fff" }}>source</th>
+                                          <th style={{ textAlign: "right", color: "#fff" }}>target</th>
+                                          <th style={{ textAlign: "right", color: "#fff" }}>Δ</th>
+                                          <th style={{ textAlign: "left", color: "#fff" }}>visual</th>
                                         </tr>
-                                      );
-                                    })}
-                                  </tbody>
-                                </table>
-                              </div>
-                            </div>
-                          </div>
+                                      </thead>
+                                      <tbody>
+                                        {B.rows.map((row) => {
+                                          const tgtPct = Math.max(0, Math.min(1, row.tgt));
+                                          const curPct = Math.max(0, Math.min(1, row.cur));
+                                          const displayTgt = Math.abs(tgtPct) < 0.0001 ? 0 : tgtPct;
+                                          const displayCur = Math.abs(curPct) < 0.0001 ? 0 : curPct;
+                                          const displayDelta = Math.abs(row.delta) < 0.0001 ? 0 : row.delta;
+                                          const deltaPos = displayDelta >= 0;
 
-                          {/* Reuse existing explain payload renderer; uses existing toggle state keyed by tick_id */}
-                          {expandedExplainIds.has(r.outputA.tick_id) ? (
-                            <div style={{ marginTop: 10 }}>
-                              <strong>Decision Explanation (LLM) — A</strong>
-                              <div style={{ fontSize: 12, color: "#666", margin: "4px 0 8px" }}>
-                                Narrative derived from deterministic analysis above.
+                                          return (
+                                            <tr key={`B_${r.runId}_${row.id}`}>
+                                              <td>{row.id}</td>
+                                              <td style={{ textAlign: "right" }}>{(displayCur * 100).toFixed(2)}%</td>
+                                              <td style={{ textAlign: "right" }}>{(displayTgt * 100).toFixed(2)}%</td>
+                                              <td style={{ textAlign: "right", color: deltaPos ? "#1b7f3a" : "#b12a2a" }}>
+                                                {(displayDelta * 100).toFixed(2)}%
+                                              </td>
+                                              <td style={{ minWidth: 220 }}>
+                                                <div style={{ position: "relative", height: 10, background: "rgba(255,255,255,0.10)", borderRadius: 6 }}>
+                                                  <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: `${displayTgt * 100}%`, background: "rgba(11,42,111,0.85)", borderRadius: 6 }} />
+                                                  <div style={{ position: "absolute", left: `${displayCur * 100}%`, top: -2, width: 2, height: 14, background: "rgba(255,255,255,0.85)" }} />
+                                                </div>
+                                              </td>
+                                            </tr>
+                                          );
+                                        })}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                </div>
                               </div>
-                              {abEquivalent ? (
-                                <div style={{ fontSize: 12, color: "#2a7a3a", marginBottom: 8 }}>
-                                  Policy-Equivalent Under Current Portfolio State
+
+                              {/* Reuse existing explain payload renderer; uses existing toggle state keyed by tick_id */}
+                              {expandedExplainIds.has(r.outputA.tick_id) ? (
+                                <div style={{ marginTop: 10 }}>
+                                  <strong>Decision Explanation (LLM) — A</strong>
+                                  <div style={{ fontSize: 12, color: "#666", margin: "4px 0 8px" }}>
+                                    Narrative derived from deterministic analysis above.
+                                  </div>
+                                  {abEquivalent ? (
+                                    <div style={{ fontSize: 12, color: "#2a7a3a", marginBottom: 8 }}>
+                                      Policy-Equivalent Under Current Portfolio State
+                                    </div>
+                                  ) : null}
+                                  <div style={{ background: "#f8f8f8", padding: 8, color: "black" }}>
+                                    {renderExplainPayload(getExplainPayloadFromTick(r.outputA))}
+                                  </div>
                                 </div>
                               ) : null}
-                              <div style={{ background: "#f8f8f8", padding: 8, color: "black" }}>
-                                {renderExplainPayload(getExplainPayloadFromTick(r.outputA))}
-                              </div>
-                            </div>
-                          ) : null}
 
-                          {expandedExplainIds.has(r.outputB.tick_id) ? (
-                            <div style={{ marginTop: 10 }}>
-                              <strong>Decision Explanation (LLM) — B</strong>
-                              <div style={{ fontSize: 12, color: "#666", margin: "4px 0 8px" }}>
-                                Narrative derived from deterministic analysis above.
-                              </div>
-                              {abEquivalent ? (
-                                <div style={{ fontSize: 12, color: "#2a7a3a", marginBottom: 8 }}>
-                                  Policy-Equivalent Under Current Portfolio State
+                              {expandedExplainIds.has(r.outputB.tick_id) ? (
+                                <div style={{ marginTop: 10 }}>
+                                  <strong>Decision Explanation (LLM) — B</strong>
+                                  <div style={{ fontSize: 12, color: "#666", margin: "4px 0 8px" }}>
+                                    Narrative derived from deterministic analysis above.
+                                  </div>
+                                  {abEquivalent ? (
+                                    <div style={{ fontSize: 12, color: "#2a7a3a", marginBottom: 8 }}>
+                                      Policy-Equivalent Under Current Portfolio State
+                                    </div>
+                                  ) : null}
+                                  <div style={{ background: "#f8f8f8", padding: 8, color: "black" }}>
+                                    {renderExplainPayload(getExplainPayloadFromTick(r.outputB))}
+                                  </div>
                                 </div>
                               ) : null}
-                              <div style={{ background: "#f8f8f8", padding: 8, color: "black" }}>
-                                {renderExplainPayload(getExplainPayloadFromTick(r.outputB))}
-                              </div>
-                            </div>
-                          ) : null}
 
-                          {SHOW_DEV_AB_REQUEST_PREVIEW && r.devRequests ? (
-                            <details style={{ marginTop: 10 }}>
-                              <summary style={{ cursor: "pointer" }}>Dev: stored A/B request snapshots</summary>
-                              <pre style={{ background: "#f8f8f8", padding: 8, color: "black", maxHeight: 260, overflow: "auto" }}>
-                                {JSON.stringify(r.devRequests, null, 2)}
-                              </pre>
-                            </details>
-                          ) : null}
+                              {SHOW_DEV_AB_REQUEST_PREVIEW && r.devRequests ? (
+                                <details style={{ marginTop: 10 }}>
+                                  <summary style={{ cursor: "pointer" }}>Dev: stored A/B request snapshots</summary>
+                                  <pre style={{ background: "#f8f8f8", padding: 8, color: "black", maxHeight: 260, overflow: "auto" }}>
+                                    {JSON.stringify(r.devRequests, null, 2)}
+                                  </pre>
+                                </details>
+                              ) : null}
                             </>
                           ) : null}
                         </div>
@@ -4906,38 +5517,38 @@ export default function Page() {
                           {importPreviewAssets.map((a, idx) => {
                             const sourceValue = typeof a.source_value_usd === "number" ? a.source_value_usd : null;
                             return (
-                            <tr key={`imp_${a.id}_${idx}`}>
-                              <td>{a.id}</td>
-                              <td>{a.name}</td>
-                              <td>
-                                <select
-                                  value={a.risk_class}
-                                  onChange={(e) => onUpdatePreviewRiskClass(idx, e.target.value)}
-                                >
-                                  {RISK_CLASS_OPTIONS.map((opt) => (
-                                    <option key={`rc_${opt}`} value={opt}>
-                                      {humanizeOption(opt || "(none)")}
-                                    </option>
-                                  ))}
-                                </select>
-                              </td>
-                              <td>
-                                <select
-                                  value={a.role ?? "satellite"}
-                                  onChange={(e) => onUpdatePreviewRole(idx, e.target.value)}
-                                >
-                                  {ROLE_OPTIONS.map((opt) => (
-                                    <option key={`role_${opt}`} value={opt}>
-                                      {humanizeOption(opt)}
-                                    </option>
-                                  ))}
-                                </select>
-                              </td>
-                              <td style={{ textAlign: "right" }}>{(a.current_weight * 100).toFixed(2)}%</td>
-                              <td style={{ textAlign: "right" }}>{a.expected_return.toFixed(2)}</td>
-                              <td style={{ textAlign: "right" }}>{a.volatility.toFixed(2)}</td>
-                              <td style={{ textAlign: "right" }}>{sourceValue === null ? "--" : sourceValue.toFixed(2)}</td>
-                            </tr>
+                              <tr key={`imp_${a.id}_${idx}`}>
+                                <td>{a.id}</td>
+                                <td>{a.name}</td>
+                                <td>
+                                  <select
+                                    value={a.risk_class}
+                                    onChange={(e) => onUpdatePreviewRiskClass(idx, e.target.value)}
+                                  >
+                                    {RISK_CLASS_OPTIONS.map((opt) => (
+                                      <option key={`rc_${opt}`} value={opt}>
+                                        {humanizeOption(opt || "(none)")}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </td>
+                                <td>
+                                  <select
+                                    value={a.role ?? "satellite"}
+                                    onChange={(e) => onUpdatePreviewRole(idx, e.target.value)}
+                                  >
+                                    {ROLE_OPTIONS.map((opt) => (
+                                      <option key={`role_${opt}`} value={opt}>
+                                        {humanizeOption(opt)}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </td>
+                                <td style={{ textAlign: "right" }}>{(a.current_weight * 100).toFixed(2)}%</td>
+                                <td style={{ textAlign: "right" }}>{a.expected_return.toFixed(2)}</td>
+                                <td style={{ textAlign: "right" }}>{a.volatility.toFixed(2)}</td>
+                                <td style={{ textAlign: "right" }}>{sourceValue === null ? "--" : sourceValue.toFixed(2)}</td>
+                              </tr>
                             );
                           })}
                         </tbody>

@@ -296,11 +296,11 @@ const TIERS = [
     title: "Observer Access",
     meta: "Allocator v1",
     price: "Free",
-    copy: "Observe real allocation decisions generated under policy constraints. Decisions are deterministic, non-custodial, and fully auditable.",
-    bullets: ["Policy-driven allocation outcomes", "Portfolio risk, churn, and weighting insights", "Side-by-side A/B policy comparisons",
+    copy: "Evaluate real allocation decisions generated under policy constraints. Understand portfolio risk, weighting logic, and scenario sensitivity — with full transparency.",
+    bullets: ["Policy-driven allocation outcomes", "Portfolio risk, churn, and weighting insights", "LLM explainers for decisions",
         "Multi-tick simulation results"
     ],
-    cta: { label: "View System", href: "/auth/login" },
+    cta: { label: "Evaluate System", href: "/app" },
     icon: "eye" as IconName,
   },
   {
@@ -308,7 +308,7 @@ const TIERS = [
     meta: "Allocator v1-v2",
     price: "$79/month",
     copy:
-      "Designed for anyone who wants to reason about allocation the way institutions do — with explicit rules, repeatable outcomes, and audit-grade clarity",
+      "Design and test allocation policies the way institutions do. Compare strategies, simulate regimes, and generate repeatable, auditable outcomes.",
     bullets: ["Policy creation with enforceable constraints", "Regime-aware scenario simulation", "Persistant decision logs for audit and review"
         ,"Wallet-native and custom portfolio imports"
     ],
@@ -625,10 +625,9 @@ export default function MarketingPageClient() {
           <section className="hero-grid">
             <div>
               <div className="pill">Authority-Gated Decision Intelligence</div>
-              <h1 className="hero-title">Decision intelligence and authority for crypto-native institutions.</h1>
+              <h1 className="hero-title">Decision intelligence for crypto-native portfolio managers and DAOs</h1>
               <p className="hero-subhead">
-                Lead with governance. Enforce mandates. Run allocators inside enforceable constraints -- no custody, no
-                execution.
+                Model allocations, encode policy constraints, and generate auditable decisions across scenarios — without custody or execution.
               </p>
               <p className="hero-body">
                 Sagitta AAA is an authority-gated decision engine for DAOs, DeFi portfolio managers, and institutions
@@ -660,33 +659,9 @@ export default function MarketingPageClient() {
                 <a href="#pricing" className="cta-outline focus-ring cta-btn" style={{ color: "#e6edf3" }}>
                   View pricing
                 </a>
-                <a href="#pricing" className="cta-outline focus-ring cta-btn" style={{ color: "#e6edf3" }}>
-                  View System
+                <a href="/app" className="cta-outline focus-ring cta-btn" style={{ color: "#e6edf3" }}>
+                  Evaluate System
                 </a>
-              </div>
-            </div>
-
-            <div className="surface-strong card-hover panel">
-              <div className="row-between">
-                <div style={{ fontSize: 12, color: "rgba(255,255,255,0.6)" }}>Authority Layering</div>
-                <div className="accent-text" style={{ fontSize: 11 }}>
-                  Institutional controls
-                </div>
-              </div>
-              <div style={{ marginTop: 16, display: "grid", gap: 14 }}>
-                {[
-                  { title: "Policy engines", copy: "Mandates encoded as enforceable policy and constraints." },
-                  { title: "Scenario governance", copy: "Regime-aware decisions with audit-grade trails." },
-                  { title: "Decision routing", copy: "Review, qualification, and approval gates before execution." },
-                ].map((item) => (
-                  <div key={item.title} className="surface panel-sm" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                    <div style={{ fontSize: 13, fontWeight: 600 }}>{item.title}</div>
-                    <div style={{ fontSize: 12, color: "rgba(255,255,255,0.6)" }}>{item.copy}</div>
-                  </div>
-                ))}
-              </div>
-              <div style={{ marginTop: 20, fontSize: 12, color: "rgba(255,255,255,0.6)" }}>
-                AAA generates decisions only. Execution and custody remain separate.
               </div>
             </div>
           </section>
@@ -800,12 +775,37 @@ export default function MarketingPageClient() {
                 </div>
               ))}
             </div>
+
+            <div style={{ marginTop: 40 }}></div> 
+            <div className="surface-strong card-hover panel" style={{ width: "50%", margin: "auto" }}>
+              <div className="row-between">
+                <div style={{ fontSize: 12, color: "rgba(255,255,255,0.6)" }}>Decision Authority & Controls</div>
+                <div className="accent-text" style={{ fontSize: 11 }}>
+                  Institutional controls
+                </div>
+              </div>
+              <div style={{ marginTop: 16, display: "grid", gap: 14 }}>
+                {[
+                  { title: "Policy engines", copy: "Mandates encoded as enforceable policy and constraints." },
+                  { title: "Scenario governance", copy: "Regime-aware decisions with audit-grade trails." },
+                  { title: "Decision routing", copy: "Review, qualification, and approval gates before execution." },
+                ].map((item) => (
+                  <div key={item.title} className="surface panel-sm" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600 }}>{item.title}</div>
+                    <div style={{ fontSize: 12, color: "rgba(255,255,255,0.6)" }}>{item.copy}</div>
+                  </div>
+                ))}
+              </div>
+              <div style={{ marginTop: 20, fontSize: 12, color: "rgba(255,255,255,0.6)" }}>
+                AAA generates decisions only. Execution and custody remain separate.
+              </div>
+            </div>
           </section>
 
           <section id="pricing" className="section">
-            <div className="section-title">Authority & pricing</div>
+            <div className="section-title">Access Modes & Pricing</div>
             <p className="section-lead">Authority precedes automation. AAA only operates autonomously when governance explicitly permits it.</p>
-            <p className="section-note">Access remains authority-gated; people qualify for authority; they do not buy features.</p>
+            <p className="section-note">Access models are designed to match responsibility, risk tolerance, and governance maturity.<br/>Individuals qualify; institutions govern.</p>
 
             <div className="pricing-grid">
               {TIERS.map((tier) => (
@@ -872,7 +872,14 @@ export default function MarketingPageClient() {
                   >
                     <div style={{ fontSize: 16, fontWeight: 600, color: "#e6edf3", paddingBottom: "8px" }}>{noteItem.title}</div>
                     <div style={{ fontSize: 13, fontStyle: "italic", color: "rgba(255, 255, 255, 0.6)" }}>{noteItem.subtitle}</div>
-                    <div style={{ marginTop: 8, fontSize: 13, color: "rgba(255,255,255,0.7)" }}>Read -&gt;</div>
+                    <div style={{ marginTop: 8, fontSize: 13, color: "rgba(255,255,255,0.7)", display: "flex", alignItems: "center", gap: 8 }}>
+                      <span>Read -&gt;</span>
+                      {noteItem.audioUrl ? (
+                        <span style={{ fontSize: 11, color: "#9fbdd8", border: "1px solid rgba(159,189,216,0.35)", padding: "2px 8px", borderRadius: 999 }}>
+                          Audio Available
+                        </span>
+                      ) : null}
+                    </div>
                   </button>
                 );
               })}

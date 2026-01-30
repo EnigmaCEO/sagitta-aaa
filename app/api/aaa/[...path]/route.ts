@@ -8,37 +8,62 @@ const DEBUG = true;
 
 async function proxy(
   req: NextRequest,
-  ctx: { params: Promise<{ path?: string[] }> } // ✅ Next 16: params is async
+  ctx: { params: Promise<{ path?: string[] }> }
 ) {
   if (!API_BASE) {
     return NextResponse.json({ ok: false, error: "AAA_API_BASE_URL not set" }, { status: 500 });
   }
 
-  const accessToken = await auth0.getAccessTokenString().catch(() => undefined);
-  if (!accessToken) {
-    return NextResponse.json({ ok: false, error: "no access token available" }, { status: 401 });
-  }
+  const isRead = req.method === "GET" || req.method === "HEAD";
 
-  // ✅ Next 16 requirement: unwrap params before use
   const { path = [] } = await ctx.params;
-
   const targetUrl = `${API_BASE.replace(/\/+$/, "")}/${path.join("/")}${req.nextUrl.search}`;
 
-  const hasBody = !["GET", "HEAD"].includes(req.method);
+  const upstreamPath = `/${path.join("/")}`;
+
+  // ✅ reads that must still be authenticated
+  const protectedRead =
+    upstreamPath === "/portfolios" || upstreamPath.startsWith("/portfolios/");
+    
+  // ✅ In App Router, pass the request for correct cookie scope
+  const tokenRes = await auth0.getAccessToken().catch(() => null);
+
+  const accessToken =
+    tokenRes && typeof tokenRes === "object" && "token" in tokenRes
+      ? (tokenRes as { token?: string }).token
+      : undefined;
+  
+
+  //console.log("[sagitta:api] proxy", { method: req.method, upstreamPath, protectedRead, authed: !!accessToken });
+
+
+  // ✅ Writes require auth; reads do not
+  if (!accessToken && (!isRead && !protectedRead)) {
+    return NextResponse.json({ ok: false, error: "Not authenticated (no access token)" }, { status: 401 });
+  }
+  
+  const hasBody = !isRead;
   const body = hasBody ? await req.arrayBuffer() : undefined;
 
   const headers = new Headers();
-  headers.set("authorization", `Bearer ${accessToken}`);
+
+  //console.log("[sagitta:api] proxy", { method: req.method, authed: !!accessToken });
+
+  // ✅ Only set Authorization if we actually have a token
+  if (accessToken) headers.set("authorization", `Bearer ${accessToken}`);
+
   if (req.headers.get("content-type")) headers.set("content-type", req.headers.get("content-type")!);
   if (req.headers.get("accept")) headers.set("accept", req.headers.get("accept")!);
 
-  if (DEBUG) console.log("[sagitta:api] proxy", { method: req.method, targetUrl });
+  //if (DEBUG) console.log("[sagitta:api] proxy", { method: req.method, targetUrl, authed: !!accessToken });
+  //console.log("[sagitta:api] proxy headers", req.method, targetUrl, Array.from(headers.entries()));
 
   const upstream = await fetch(targetUrl, {
     method: req.method,
     headers,
     body: hasBody ? body : undefined,
     cache: "no-store",
+    credentials: "include",
   });
 
   const contentType = upstream.headers.get("content-type") || "application/octet-stream";

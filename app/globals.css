@@ -43,6 +43,7 @@ button.btn-primary:hover:not(:disabled) {
 button:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+  background-color: #55555533;
 }
 
 input,
@@ -53,6 +54,11 @@ textarea {
   padding: 6px 8px;
   background-color: #252525;
   color: #ffffff;
+} 
+
+input:disabled, select:disabled, textarea:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 th {

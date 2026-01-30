@@ -1,0 +1,115 @@
+{
+    "scenario_id": "observe",
+    "sim_now": "2026-01-27T16:40:33.034711+00:00",
+    "mode": "protocol",
+    "capital_inflow_amount": 10000,
+    "regime": {
+        "mission": "risk_adjusted_return",
+        "risk_posture": "neutral",
+        "market_regime": "neutral",
+        "confidence_level": "normal",
+        "correlation_state": "normal",
+        "liquidity_state": "normal",
+        "sector_sentiment": {},
+        "asset_sentiment": {}
+    },
+    "portfolio_controls": {
+        "max_concentration_per_asset": 0.7,
+        "min_position_usd": 0,
+        "sink_asset_id": "USDC"
+    },
+    "protocol_state": {
+        "portfolio": {},
+        "constraints": {},
+        "weekly_inflow_amount": 10000,
+        "belief_policy": null
+    },
+    "simulation_state": {
+        "initial_cash": 100000.0,
+        "current_year": 0,
+        "max_years": 10,
+        "baseline_weights": {},
+        "baseline_value": 100000.0,
+        "aaa_value": 100000.0,
+        "seed": 42,
+        "timeline": [],
+        "summary": {},
+        "min_annual_return": -0.9,
+        "max_annual_return": 2.0,
+        "shock_cap_for_vol_update": 1.0,
+        "vol_min": 0.01,
+        "vol_max": 2.0,
+        "er_min": -0.95,
+        "er_max": 2.0,
+        "belief_alpha": 0.15,
+        "belief_beta": 0.2,
+        "regime_vol_multiplier": 1.0,
+        "sim_weight_floor": 0.01
+    },
+    "last_tick": null,
+    "last_belief_update_from_plan_id": null,
+    "portfolio": {
+        "assets": [
+            {
+                "id": "SPC",
+                "name": "Sagitta SPC",
+                "current_weight": 0.8,
+                "expected_return": 0.28,
+                "volatility": 0.24,
+                "risk_class": "wealth_management",
+                "role": "core"
+            },
+            {
+                "id": "USDC",
+                "name": "US Dollar Circle",
+                "current_weight": 0.05,
+                "expected_return": 0.14,
+                "volatility": 0.07,
+                "risk_class": "stablecoin",
+                "role": "liquidity"
+            },
+            {
+                "id": "SKY",
+                "name": "SKY",
+                "current_weight": 0.03,
+                "expected_return": 0.156,
+                "volatility": 0.3,
+                "risk_class": "defi_bluechip",
+                "role": "satellite"
+            },
+            {
+                "id": "GFI",
+                "name": "Goldfinch",
+                "current_weight": 0.02,
+                "expected_return": 0.11,
+                "volatility": 0.4,
+                "risk_class": "fund_of_funds",
+                "role": "defensive"
+            },
+            {
+                "id": "DOT",
+                "name": "Polkadot",
+                "current_weight": 0.05,
+                "expected_return": 0.14,
+                "volatility": 0.7,
+                "risk_class": "large_cap_crypto",
+                "role": "speculative"
+            },
+            {
+                "id": "SYRUP",
+                "name": "Maple Finance",
+                "current_weight": 0.05,
+                "expected_return": 0.156,
+                "volatility": 0.2,
+                "risk_class": "defi_bluechip",
+                "role": "satellite"
+            }
+        ],
+        "total_value": 100000.0
+    },
+    "constraints": {
+        "min_asset_weight": 0.05,
+        "max_asset_weight": 0.6,
+        "max_concentration": 0.7
+    }
+}

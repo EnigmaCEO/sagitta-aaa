@@ -33,3 +33,19 @@ export type ImportRunResult = {
   errors: string[];
   applied_count?: number;
 };
+
+export type Portfolio = {
+  assets: Array<{
+    id: string;
+    name: string;
+    risk_class?: string;
+    role?: string;
+    current_weight: number;
+    expected_return: number;
+    volatility: number;
+    [key: string]: unknown;
+  }>;
+  total_value?: number;
+  [key: string]: unknown;
+};
+

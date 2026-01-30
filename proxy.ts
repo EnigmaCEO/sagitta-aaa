@@ -9,6 +9,7 @@ export default async function proxy(req: NextRequest) {
   if (DEBUG) {
     console.log("[sagitta:proxy] incoming", { url: req.nextUrl.pathname + req.nextUrl.search, method: req.method, cookiePreview: maskedCookiePreview });
   }
+  
   try {
     // cast via unknown -> Request to avoid using `any`
     const res = await auth0.middleware(req as unknown as Request);

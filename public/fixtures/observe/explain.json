@@ -1,0 +1,21 @@
+{
+    "summary": "Based on deterministic analysis, this allocation decision adjusted weights across all six assets in response to normalization under the specified rules. Relative to the source portfolio, significant changes were made, particularly for asset SPC. Churn is high at 54.85%. Portfolio volatility decreased by 0.089. No assets were pruned, and no explicit role floors dictated asset retention. Policies are equivalent under the current portfolio state, with no measurable impact from policy knobs: Policy-Equivalent Under Current Portfolio State. No policy-level effects observed under current conditions.",
+    "rationale_bullets": [
+        "Weights were recomputed for all six assets using deterministic, rules-based methods, as indicated by reason codes.",
+        "SPC experienced the largest weight shift, driven by normalization and role-modified scoring; this is explicitly reported as a delta of 0.546.",
+        "Churn is high at 54.85%, reflecting substantial rebalancing relative to the source portfolio.",
+        "Role modifiers adjusted expected return and volatility inputs for some assets, but no role floors were invoked, and all assets remained above minimum constraints.",
+        "No assets were pruned, as indicated in pruning_summary and policy_sensitivity divergence_conditions.",
+        "The decision is policy-equivalent: policy_effects and policy_sensitivity fields both report no divergence, no binding constraints, and zero weight delta versus baseline.",
+        "Inactive policy factors (confidence_level, correlation_state, liquidity_state, risk_posture, mission, constraints) confirm no policy-sensitivity under these conditions."
+    ],
+    "risk_notes": [
+        "Portfolio volatility decreased by 0.089, as explicitly reported in risk_summary.delta.",
+        "No risk budget multipliers were used, and risk posture remained neutral."
+    ],
+    "confidence": "medium",
+    "meta": {
+        "enabled": true,
+        "model": "gpt-4.1"
+    }
+}
