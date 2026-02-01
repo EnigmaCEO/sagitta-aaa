@@ -27,7 +27,9 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Missing AAA_API_BASE_URL env var" }, { status: 500 });
   }
 
-  const accessToken = await auth0.getAccessTokenString(request).catch(() => undefined);
+  const accessToken =
+    (await auth0.getAccessTokenString(request).catch(() => undefined)) ||
+    (await auth0.getAccessTokenString().catch(() => undefined));
   if (!accessToken) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }

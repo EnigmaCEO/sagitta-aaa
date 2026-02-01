@@ -546,7 +546,7 @@ export default function AccountClient({ initialUser, initialSummary = null }: Pr
                     <button
                       className="btn-primary"
                       onClick={handlePortal}
-                      disabled={portalLoading || !summary?.billing?.stripe_customer_id}
+                      disabled={portalLoading}
                     >
                       {portalLoading ? "Opening billing portal..." : "Manage billing"}
                     </button>
