@@ -1,9 +1,16 @@
-import { NextRequest } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { auth0 } from "./lib/auth0";
 
 const DEBUG = true;
 
 export default async function proxy(req: NextRequest) {
+  if (req.nextUrl.pathname === "/auth/callback") {
+    const error = req.nextUrl.searchParams.get("error");
+    if (error === "access_denied") {
+      const target = new URL("/", req.url);
+      return NextResponse.redirect(target);
+    }
+  }
   const rawCookie = req.headers.get("cookie") ?? "";
   const maskedCookiePreview = rawCookie ? `${rawCookie.slice(0, 30)}${rawCookie.length > 60 ? "…"+rawCookie.slice(-20) : ""}` : "(none)";
   if (DEBUG) {
