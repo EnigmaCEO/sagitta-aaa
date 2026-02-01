@@ -1,18 +1,12 @@
-import { headers } from "next/headers";
-
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-function resolveOrigin() {
-  const h = headers();
-  const host = h.get("x-forwarded-host") || h.get("host") || "aaa.sagitta.systems";
-  const proto = h.get("x-forwarded-proto") || "https";
-  return `${proto}://${host}`;
-}
-
 export default function AuthLogPage() {
-  const origin = resolveOrigin();
-  const endpoint = `${origin}/api/aaa/auth/logs`;
+  const base =
+    (process.env.APP_BASE_URL ||
+      process.env.NEXT_PUBLIC_BASE_URL ||
+      "https://aaa.sagitta.systems").replace(/\/+$/, "");
+  const endpoint = `${base}/api/aaa/auth/logs`;
 
   return (
     <main className="marketing-page">
