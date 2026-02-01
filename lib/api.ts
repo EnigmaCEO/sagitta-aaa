@@ -12,7 +12,10 @@ function isObservePath(path: string) {
   return path.includes("/observe");
 }
 
-const LOGOUT_REDIRECT = "/auth/logout";
+const LOGOUT_REDIRECT =
+  typeof window !== "undefined"
+    ? `/auth/logout?returnTo=${encodeURIComponent(window.location.origin + "/")}`
+    : "/auth/logout";
 
 function handleForbidden(res: Response) {
   if (res.status === 403 && typeof window !== "undefined") {

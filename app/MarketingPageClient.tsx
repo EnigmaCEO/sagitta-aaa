@@ -326,7 +326,7 @@ const TIERS = [
       "Execute allocation decisions within controlled operational workflows designed for accountability, review, and institutional risk tolerance. This tier enables team-based access and the v3 governance allocator.",
     bullets: ["Team-based access with role controls", "Real-time Agent mode workflows", 
         "Enforced policy and risk guardrails", "Version controlled portfolio and policy updates"],
-    cta: { label: "Request Access", href: "mailto:sales@sagitta.systems" },
+    cta: { label: "Request Access", href: "mailto:access@sagitta.systems" },
     icon: "key" as IconName,
   },
   {
@@ -341,7 +341,7 @@ const TIERS = [
       "Custom SLA and support packages",
       "On-prem or sovereign-controlled deployment options"
     ],
-    cta: { label: "Request access", href: "mailto:contact@sagitta.ai" },
+    cta: { label: "Request access", href: "mailto:access@sagitta.systems" },
     icon: "crown" as IconName,
   },
 ];
@@ -656,7 +656,7 @@ export default function MarketingPageClient() {
               </div>
 
               <div className="cta-row">
-                <a href="mailto:contact@sagitta.ai" className="cta-outline focus-ring cta-btn" style={{ color: "#e6edf3" }}>
+                <a href="mailto:access@sagitta.systems" className="cta-outline focus-ring cta-btn" style={{ color: "#e6edf3" }}>
                   Request access
                 </a>
                 <a href="#pricing" className="cta-outline focus-ring cta-btn" style={{ color: "#e6edf3" }}>
@@ -907,6 +907,14 @@ export default function MarketingPageClient() {
                 <span aria-hidden="true">|</span>
                 <a href="/privacy" className="focus-ring" style={{ textDecoration: "none" }}>
                   Privacy Policy
+                </a>
+                <span aria-hidden="true">|</span>
+                <a
+                  href="/support"
+                  className="focus-ring"
+                  style={{ textDecoration: "none" }}
+                >
+                  Support
                 </a>
               </div>
             </div>

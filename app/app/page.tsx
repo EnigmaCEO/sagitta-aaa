@@ -714,6 +714,7 @@ export default function Page() {
     ok?: boolean;
     auth?: "guest" | "user";
     sub?: string;
+    account_id?: string | null;
     authority_level?: number;
     roles?: string[];
     scopes?: string[];
@@ -741,7 +742,9 @@ export default function Page() {
         // If your /me already returns guest JSON on no session, this is mostly redundant.
         if (!resp.ok) {
           if (resp.status === 403) {
-            if (typeof window !== "undefined") window.location.assign("/auth/logout");
+            if (typeof window !== "undefined") {
+              window.location.assign(`/auth/logout?returnTo=${encodeURIComponent(window.location.origin + "/")}`);
+            }
             return;
           }
           if (resp.status === 401) {
@@ -3425,9 +3428,9 @@ export default function Page() {
     []
   );
 
-  // NEW: logout handler — POST to /auth/logout then navigate to root
+  // NEW: logout handler — redirect through /auth/logout (safe even when no session)
   const onLogout = useCallback(async () => {
-    window.location.assign("/auth/logout");
+    window.location.assign(`/auth/logout?returnTo=${encodeURIComponent(window.location.origin + "/")}`);
   }, []);
 
   const authorityTierLabel = useMemo(() => {
@@ -3448,6 +3451,11 @@ export default function Page() {
   }, [authorityLevel]);
 
   const isPortfolioBlank = (portfolioDraft?.assets ?? []).length === 0;
+  const isAuthenticated = !!(
+    meInfo &&
+    meInfo.auth !== "guest" &&
+    ((typeof meInfo.sub === "string" && meInfo.sub) || (typeof meInfo.account_id === "string" && meInfo.account_id))
+  );
 
   if (meInfo === null) return null;
 
@@ -3474,7 +3482,25 @@ export default function Page() {
             <div style={{ fontSize: 14, fontWeight: 600, color: "var(--sagitta-blue, #63D4FF)" }}>{authorityTierLabel}</div>
           </div>
           <div style={{ justifySelf: "end", display: "flex", gap: 8, alignItems: "center" }}>
-            {(authorityLevel ?? 0) > 0 ? (
+            {isAuthenticated ? (
+              <>
+                <a
+                  href="/account"
+                  title="Account"
+                  style={{
+                    background: "transparent",
+                    border: "1px solid rgba(255,255,255,0.06)",
+                    color: "var(--sagitta-blue, #63D4FF)",
+                    padding: "6px 10px",
+                    borderRadius: 6,
+                    fontSize: 13,
+                    lineHeight: "16px",
+                    fontWeight: 500,
+                    textDecoration: "none",
+                  }}
+                >
+                  Account
+                </a>
               <button
                 onClick={onLogout}
                 title="Logout and return to root"
@@ -3484,14 +3510,20 @@ export default function Page() {
                   color: "var(--sagitta-blue, #63D4FF)",
                   padding: "6px 10px",
                   borderRadius: 6,
+                  fontSize: 13,
+                  lineHeight: "16px",
+                  fontWeight: 500,
                 }}
               >
                 Sign Out
               </button>
+              </>
             ) : (
               <button
-                onClick={onLogout}
-                title="Logout and return to root"
+                onClick={() => {
+                  if (typeof window !== "undefined") window.location.assign("/");
+                }}
+                title="Return to root"
                 style={{
                   background: "transparent",
                   border: "1px solid rgba(255,255,255,0.06)",
@@ -3507,7 +3539,7 @@ export default function Page() {
         </div>
       </header>
 
-      {/* NEW: render me info (if present) to help confirm sqlite upsert and authority 
+      {/* NEW: render me info (if present) to help confirm sqlite upsert and authority
       <div style={{ margin: "8px 0", padding: 8, borderRadius: 8, background: "var(--surface)", color: "var(--sagitta-blue, #63D4FF)", display: "block" }}>
         <strong>User info (from /api/aaa/me):</strong>
         <div style={{ marginTop: 6, fontSize: 13, color: "var(--sagitta-blue-muted, #7AA1C2)" }}>
@@ -3520,7 +3552,8 @@ export default function Page() {
           )}
         </div>
       </div>
-      */}
+       */}
+      
 
       <div style={styles.stack}>
         <div style={{ height: 12 }} />
