@@ -492,6 +492,7 @@ export default function MarketingPageClient() {
   const noteSlug = searchParams.get("note");
   const activeNote = useMemo(() => getNoteBySlug(noteSlug), [noteSlug]);
   const noteOpen = Boolean(noteSlug);
+  const [dismissedNotice, setDismissedNotice] = useState<string | null>(null);
 
   const noteFallback =
     noteSlug && !activeNote
@@ -510,6 +511,43 @@ export default function MarketingPageClient() {
     }
     trackEvent("note_opened", { slug: noteSlug });
   }, [noteSlug]);
+
+  const verificationNotice = useMemo(() => {
+    const params = new URLSearchParams(searchParams.toString());
+    const success = params.get("success") === "true";
+    const message = params.get("message");
+    const code = params.get("code");
+    if (!success) return null;
+    if (!message && code !== "success") return null;
+    return {
+      success: true,
+      message: message || "Your email was verified. You can continue using the application.",
+    };
+  }, [searchParams]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(searchParams.toString());
+    const shouldClean =
+      params.get("success") ||
+      params.get("message") ||
+      params.get("code") ||
+      params.get("supportSignUp") ||
+      params.get("supportForgotPassword");
+    if (!shouldClean) {
+      return;
+    }
+
+    ["success", "message", "code", "supportSignUp", "supportForgotPassword"].forEach((key) =>
+      params.delete(key),
+    );
+    const query = params.toString();
+    const target = query ? `${pathname}?${query}` : pathname;
+    const currentQuery = searchParams.toString();
+    const current = currentQuery ? `${pathname}?${currentQuery}` : pathname;
+    if (target !== current) {
+      router.replace(target, { scroll: false });
+    }
+  }, [searchParams, pathname, router]);
 
   useEffect(() => {
     if (!tocOpen) {
@@ -625,6 +663,33 @@ export default function MarketingPageClient() {
 
       <main className="marketing-page">
         <div className="marketing-shell container">
+          {verificationNotice && verificationNotice.message !== dismissedNotice ? (
+            <div
+              className="surface"
+              style={{
+                margin: "16px 0 28px",
+                padding: "12px 16px",
+                borderRadius: 12,
+                border: "1px solid rgba(255,255,255,0.12)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 16,
+                background: "rgba(255,255,255,0.04)",
+              }}
+            >
+              <div style={{ fontSize: 13, color: "rgba(255,255,255,0.8)" }}>
+                {verificationNotice.message}
+              </div>
+              <button
+                type="button"
+                className="note-button focus-ring"
+                onClick={() => setDismissedNotice(verificationNotice.message)}
+              >
+                Dismiss
+              </button>
+            </div>
+          ) : null}
           <section className="hero-grid">
             <div>
               <div className="pill">Authority-Gated Decision Intelligence</div>

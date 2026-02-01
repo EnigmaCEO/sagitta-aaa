@@ -156,7 +156,7 @@ export async function GET(request: Request) {
         ? profile.user_metadata.use_mfa
         : typeof profile.app_metadata?.use_mfa === "boolean"
         ? profile.app_metadata.use_mfa
-        : null;
+        : false;
     return NextResponse.json({ enabled });
   } catch (err: unknown) {
     return NextResponse.json(

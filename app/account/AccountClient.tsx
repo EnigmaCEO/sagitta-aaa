@@ -157,7 +157,7 @@ export default function AccountClient({ initialUser, initialSummary = null }: Pr
     if (!summary) return;
     const next =
       summary.security?.mfa_enabled ?? summary.security?.mfa_enrolled ?? null;
-    setMfaEnabled(next);
+    setMfaEnabled(next ?? false);
   }, [summary]);
 
   useEffect(() => {
@@ -174,8 +174,8 @@ export default function AccountClient({ initialUser, initialSummary = null }: Pr
         }
         const payload = (await res.json().catch(() => null)) as { enabled?: boolean } | null;
         const enabled = typeof payload?.enabled === "boolean" ? payload.enabled : null;
-        if (!cancelled && enabled !== null) {
-          setMfaEnabled(enabled);
+        if (!cancelled) {
+          setMfaEnabled(enabled ?? false);
         }
       } catch {
         // ignore: keep last known status
@@ -382,7 +382,6 @@ export default function AccountClient({ initialUser, initialSummary = null }: Pr
 
   const handleToggleMfa = useCallback(() => {
     if (mfaSaving) return;
-    if (mfaEnabled === null) return;
     openMfaConfirm(mfaEnabled ? "disable" : "enable");
   }, [mfaEnabled, mfaSaving, openMfaConfirm]);
 
@@ -392,10 +391,10 @@ export default function AccountClient({ initialUser, initialSummary = null }: Pr
     void performMfaAction(mfaPendingAction);
   }, [mfaPendingAction, closeMfaConfirm, performMfaAction]);
 
-  const mfaKnown = mfaEnabled !== null;
-  const mfaStatusText = mfaKnown ? (mfaEnabled ? "Enabled" : "Disabled") : "Unknown";
+  const mfaKnown = true;
+  const mfaStatusText = mfaEnabled ? "Enabled" : "Disabled";
   const mfaSwitchOn = mfaEnabled === true;
-  const mfaSwitchDisabled = !mfaKnown || mfaSaving;
+  const mfaSwitchDisabled = mfaSaving;
 
   return (
     <div className="note-drawer-overlay" role="presentation" onClick={handleClose}>
@@ -613,9 +612,6 @@ export default function AccountClient({ initialUser, initialSummary = null }: Pr
                     <span className="text-xs text-white/50">Updating...</span>
                   ) : null}
                 </div>
-                {!mfaKnown ? (
-                  <div className="text-xs text-white/50">Status unavailable. Sign in again to refresh.</div>
-                ) : null}
                 {mfaNotice ? <div className="text-xs text-emerald-200">{mfaNotice}</div> : null}
                 {mfaError ? <div className="text-xs text-red-200">{shortMessage(mfaError, 90)}</div> : null}
                 <div style={{ marginTop: 20 }}>MFA is managed by Auth0.</div>
