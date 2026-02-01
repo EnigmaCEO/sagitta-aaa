@@ -43,9 +43,10 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "Missing AAA_API_BASE_URL env var" }, { status: 500 });
   }
 
+  const sessionUser = session.user as Record<string, unknown>;
   const user = {
-    sub: typeof session.user.sub === "string" ? session.user.sub : "",
-    email: typeof session.user.email === "string" ? session.user.email : null,
+    sub: typeof sessionUser.sub === "string" ? sessionUser.sub : "",
+    email: typeof sessionUser.email === "string" ? sessionUser.email : null,
   };
 
   let authority_level = 0;
