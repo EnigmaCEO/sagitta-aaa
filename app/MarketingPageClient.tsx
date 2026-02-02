@@ -730,6 +730,12 @@ export default function MarketingPageClient() {
                 <a href="/app" className="cta-outline focus-ring cta-btn" style={{ color: "#e6edf3" }}>
                   Evaluate System
                 </a>
+                <audio controls preload="none" style={{ width: "200px", height: "32px", alignSelf: "center" }}>
+                  <source src="/audio/intro.mp3" />
+                </audio>
+              </div>
+              <div className="note-audio">
+                
               </div>
             </div>
           </section>
