@@ -4,7 +4,7 @@ import { auth0 } from "@/lib/auth0";
 export const runtime = "nodejs";
 
 const API_BASE = process.env.AAA_API_BASE_URL;
-const DEBUG = true;
+const DEBUG = process.env.AAA_PROXY_DEBUG === "1" || process.env.NODE_ENV !== "production";
 
 async function proxy(
   req: NextRequest,
@@ -23,22 +23,47 @@ async function proxy(
 
   // ✅ reads that must still be authenticated
   const protectedRead =
-    upstreamPath === "/portfolios" || upstreamPath.startsWith("/portfolios/");
-    
-  // ✅ In App Router, pass the request for correct cookie scope
-  const tokenRes = await auth0.getAccessToken().catch(() => null);
+    upstreamPath === "/me" ||
+    upstreamPath.startsWith("/scenarios") ||
+    upstreamPath.startsWith("/portfolios") ||
+    upstreamPath.startsWith("/policies") ||
+    upstreamPath.startsWith("/decision-runs");
 
+  // ✅ In App Router, pass the request for correct cookie scope (fallback to global if needed)
   const accessToken =
-    tokenRes && typeof tokenRes === "object" && "token" in tokenRes
-      ? (tokenRes as { token?: string }).token
-      : undefined;
+    (await auth0.getAccessTokenString(req).catch(() => undefined)) ??
+    (await auth0.getAccessTokenString().catch(() => undefined));
+
+  const cookieHeader = req.headers.get("cookie") ?? "";
+  const cookieNames = cookieHeader
+    ? cookieHeader
+        .split(";")
+        .map((part) => part.split("=")[0]?.trim())
+        .filter(Boolean)
+    : [];
+
+  if (DEBUG) {
+    const session = await auth0.getSession(req).catch(() => null);
+    console.log("[sagitta:api] proxy request", {
+      method: req.method,
+      upstreamPath,
+      targetUrl,
+      apiBasePresent: !!API_BASE,
+      protectedRead,
+      hasAccessToken: !!accessToken,
+      hasSession: !!session,
+      cookieNames,
+      contentType: req.headers.get("content-type"),
+      accept: req.headers.get("accept"),
+    });
+  }
   
 
   //console.log("[sagitta:api] proxy", { method: req.method, upstreamPath, protectedRead, authed: !!accessToken });
 
 
-  // ✅ Writes require auth; reads do not
-  if (!accessToken && (!isRead && !protectedRead)) {
+  // ✅ Writes require auth; reads require auth for protected endpoints
+  if (!accessToken && (!isRead || protectedRead)) {
     return NextResponse.json({ ok: false, error: "Not authenticated (no access token)" }, { status: 401 });
   }
   
@@ -58,16 +83,46 @@ async function proxy(
   //if (DEBUG) console.log("[sagitta:api] proxy", { method: req.method, targetUrl, authed: !!accessToken });
   //console.log("[sagitta:api] proxy headers", req.method, targetUrl, Array.from(headers.entries()));
 
-  const upstream = await fetch(targetUrl, {
-    method: req.method,
-    headers,
-    body: hasBody ? body : undefined,
-    cache: "no-store",
-    credentials: "include",
-  });
+  let upstream: Response;
+  try {
+    upstream = await fetch(targetUrl, {
+      method: req.method,
+      headers,
+      body: hasBody ? body : undefined,
+      cache: "no-store",
+      credentials: "include",
+    });
+  } catch (err) {
+    if (DEBUG) {
+      console.log("[sagitta:api] proxy fetch failed", {
+        upstreamPath,
+        targetUrl,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+    const detail = err instanceof Error ? err.message : String(err);
+    return NextResponse.json(
+      {
+        ok: false,
+        error: "upstream_unreachable",
+        detail,
+        path: upstreamPath,
+        target: targetUrl,
+      },
+      { status: 502 }
+    );
+  }
 
   const contentType = upstream.headers.get("content-type") || "application/octet-stream";
   const bytes = await upstream.arrayBuffer();
+  if (DEBUG) {
+    console.log("[sagitta:api] proxy response", {
+      upstreamPath,
+      targetUrl,
+      status: upstream.status,
+      contentType,
+    });
+  }
 
   return new NextResponse(bytes, {
     status: upstream.status,

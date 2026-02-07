@@ -6,8 +6,28 @@ const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
 const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  "title": "Sagitta Autonomous Allocation Agent (AAA)",
-  "description": "Decision intelligence for policy-driven portfolio allocation, simulation, and risk-aware analysis."
+  "title": "Sagitta Autonomous Allocation Agent",
+  "description": "Decision intelligence for autonomous allocation. Bounded, explainable, audit-ready reasoning for AI agents, DAOs, and institutional systems.",
+  "openGraph": {
+    "title": "Sagitta Autonomous Allocation Agent",
+    "description": "Decision intelligence for autonomous allocation. Bounded, explainable, audit-ready reasoning for AI agents, DAOs, and institutional systems.",
+    "url": "https://aaa.sagitta.systems",
+    "siteName": "Sagitta AAA",
+    "images": [
+      {
+        "url": "https://aaa.sagitta.systems/og-image.png"
+      }
+    ],
+    "type": "website"
+  },
+  "twitter": {
+    "card": "summary_large_image",
+    "title": "Sagitta Autonomous Allocation Agent",
+    "description": "Decision intelligence for autonomous allocation. Bounded, explainable, audit-ready reasoning for AI agents, DAOs, and institutional systems.",
+    "images": [
+      "https://aaa.sagitta.systems/og-image.png"
+    ]
+  }
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

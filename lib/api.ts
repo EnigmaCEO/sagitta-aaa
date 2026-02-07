@@ -2,10 +2,25 @@ import type { Portfolio } from "@/lib/imports/types"; // adjust path
 
 
 // Determine backend base URL:
-// 1) Use NEXT_PUBLIC_API_BASE_URL if provided (explicit override)
-// 2) If running in browser and page is served from NEXT dev (port 3000), assume backend at http://localhost:8000
-// 3) Otherwise use window.location.origin (same-origin) or fallback to localhost:8000
-const BASE = typeof window !== "undefined" ? "/api/aaa" : (process.env.AAA_API_BASE_URL || "http://localhost:8000");
+// - Browser: prefer /api/aaa (Next proxy) unless NEXT_PUBLIC_API_BASE_URL is same-origin.
+// - Server: use AAA_API_BASE_URL (or public base) with localhost fallback.
+const PUBLIC_BASE = (process.env.NEXT_PUBLIC_API_BASE_URL || "").trim();
+const SERVER_BASE = (process.env.AAA_API_BASE_URL || PUBLIC_BASE || "http://localhost:8000").trim();
+
+function resolveBrowserBase() {
+  if (!PUBLIC_BASE) return "/api/aaa";
+  try {
+    const origin = window.location.origin;
+    const resolved = new URL(PUBLIC_BASE, origin);
+    // If cross-origin, stick to the proxy so auth cookies remain valid.
+    if (resolved.origin !== origin) return "/api/aaa";
+    return resolved.toString().replace(/\/+$/, "");
+  } catch {
+    return "/api/aaa";
+  }
+}
+
+const BASE = typeof window !== "undefined" ? resolveBrowserBase() : SERVER_BASE;
 
 function isObservePath(path: string) {
   // handles "/scenario/observe", "/scenario/observe/ticks", etc.
@@ -80,7 +95,7 @@ async function req(path: string, opts: RequestInit = {}) {
 
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(`${res.status} ${res.statusText}: ${text}`);
+    throw new Error(`[${method} ${path}] ${res.status} ${res.statusText}: ${text}`);
   }
 
   // Handle empty responses safely (optional but nice)
