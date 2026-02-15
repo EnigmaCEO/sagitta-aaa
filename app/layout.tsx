@@ -54,14 +54,87 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             position: relative;
             z-index: 1;
           }
+          .marketing-header {
+            width: 100%;
+          }
+          .marketing-header-shell {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 16px 32px 8px;
+          }
+          .marketing-header-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+            width: 100%;
+          }
+          .marketing-brand {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            min-width: 0;
+            text-decoration: none;
+          }
+          .marketing-brand-logo {
+            width: 72px;
+            height: 72px;
+            object-fit: contain;
+          }
+          .marketing-brand-text {
+            font-size: 22px;
+            font-weight: 800;
+            line-height: 1.08;
+            color: #ededed;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+          }
+          .marketing-header-cta {
+            margin: 0;
+            flex-shrink: 0;
+          }
           .container {
             max-width: 1120px;
             margin: 0 auto;
             padding: 80px 32px 96px;
           }
           @media (max-width: 720px) {
+            .marketing-header-shell {
+              padding: 12px 16px 6px;
+            }
+            .marketing-header-row {
+              gap: 10px;
+            }
+            .marketing-brand-logo {
+              width: 60px;
+              height: 60px;
+            }
+            .marketing-brand-text {
+              font-size: 16px;
+              max-width: 230px;
+            }
+            .marketing-header-cta .btn-primary {
+              padding: 8px 10px;
+              font-size: 12px;
+            }
             .container {
-              padding: 64px 20px 80px;
+              padding: 60px 16px 72px;
+            }
+          }
+          @media (max-width: 560px) {
+            .marketing-header-shell {
+              padding: 10px 12px 4px;
+            }
+            .marketing-brand-logo {
+              width: 52px;
+              height: 52px;
+            }
+            .marketing-brand-text {
+              display: none;
+            }
+            .container {
+              padding: 52px 12px 64px;
             }
           }
           .hero-grid {
@@ -76,7 +149,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           }
           .hero-title {
             margin-top: 16px;
-            font-size: 44px;
+            font-size: 42px;
             line-height: 1.1;
             font-weight: 600;
           }
@@ -85,16 +158,53 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               font-size: 56px;
             }
           }
+          @media (max-width: 900px) {
+            .hero-title {
+              font-size: 36px;
+            }
+          }
+          @media (max-width: 640px) {
+            .hero-title {
+              margin-top: 14px;
+              font-size: 32px;
+              line-height: 1.15;
+            }
+          }
+          @media (max-width: 420px) {
+            .hero-title {
+              font-size: 28px;
+            }
+          }
           .hero-subhead {
             margin-top: 16px;
-            font-size: 18px;
+            font-size: 17px;
+            line-height: 1.45;
             color: rgba(255, 255, 255, 0.8);
+          }
+          @media (max-width: 640px) {
+            .hero-subhead {
+              margin-top: 12px;
+              font-size: 15px;
+            }
           }
           .hero-body {
             margin-top: 24px;
-            font-size: 18px;
+            font-size: 17px;
+            line-height: 1.5;
             color: rgba(255, 255, 255, 0.75);
-            max-width: 80%;
+            max-width: 760px;
+          }
+          @media (max-width: 960px) {
+            .hero-body {
+              margin-top: 18px;
+              max-width: 100%;
+            }
+          }
+          @media (max-width: 640px) {
+            .hero-body {
+              font-size: 15px;
+              line-height: 1.55;
+            }
           }
           .hero-pain {
             margin-top: 16px;
@@ -106,11 +216,21 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             margin-top: 24px;
             display: grid;
             gap: 16px;
-            max-width: 80%;
+            max-width: 760px;
+          }
+          @media (max-width: 960px) {
+            .highlights-grid {
+              max-width: 100%;
+            }
           }
           @media (min-width: 640px) {
             .highlights-grid {
               grid-template-columns: repeat(3, minmax(0, 1fr));
+            }
+          }
+          @media (max-width: 640px) {
+            .highlights-grid {
+              gap: 12px;
             }
           }
           .cta-row {
@@ -119,12 +239,51 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             flex-wrap: wrap;
             gap: 16px;
           }
+          .cta-row audio {
+            width: 200px;
+            max-width: 100%;
+            height: 32px;
+          }
+          @media (max-width: 640px) {
+            .cta-row {
+              margin-top: 22px;
+              gap: 10px;
+              align-items: stretch;
+            }
+            .cta-btn {
+              width: 100%;
+              display: inline-flex;
+              justify-content: center;
+              text-align: center;
+            }
+            .cta-row audio {
+              width: 100% !important;
+            }
+          }
           .section {
             margin-top: 80px;
+          }
+          .section[id] {
+            scroll-margin-top: 86px;
+          }
+          @media (max-width: 960px) {
+            .section {
+              margin-top: 68px;
+            }
+          }
+          @media (max-width: 640px) {
+            .section {
+              margin-top: 52px;
+            }
           }
           .institutions-grid {
             display: grid;
             gap: 24px;
+          }
+          @media (max-width: 960px) {
+            .institutions-grid {
+              gap: 18px;
+            }
           }
           @media (min-width: 960px) {
             .institutions-grid {
@@ -135,6 +294,11 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             display: grid;
             gap: 24px;
           }
+          @media (max-width: 960px) {
+            .features-grid {
+              gap: 18px;
+            }
+          }
           @media (min-width: 960px) {
             .features-grid {
               grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -144,6 +308,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             margin-top: 40px;
             display: grid;
             gap: 24px;
+          }
+          @media (max-width: 960px) {
+            .pricing-grid {
+              margin-top: 28px;
+              gap: 18px;
+            }
           }
           @media (min-width: 960px) {
             .pricing-grid {
@@ -161,6 +331,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             padding: 40px 0;
             font-size: 14px;
             color: rgba(255, 255, 255, 0.6);
+          }
+          @media (max-width: 640px) {
+            .footer {
+              margin-top: 56px;
+              padding: 28px 0;
+            }
           }
           .footer-row {
             display: flex;
@@ -189,8 +365,23 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           .panel {
             padding: 24px;
           }
+          @media (max-width: 960px) {
+            .panel {
+              padding: 20px;
+            }
+          }
+          @media (max-width: 640px) {
+            .panel {
+              padding: 16px;
+            }
+          }
           .panel-sm {
             padding: 16px;
+          }
+          @media (max-width: 640px) {
+            .panel-sm {
+              padding: 12px;
+            }
           }
           .pill {
             border: 1px solid rgba(255, 255, 255, 0.2);
@@ -248,15 +439,31 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             font-size: 13px;
             font-weight: 600;
           }
+          @media (max-width: 640px) {
+            .cta-btn {
+              padding: 11px 14px;
+            }
+          }
           .section-title {
             font-size: 28px;
             font-weight: 600;
+          }
+          @media (max-width: 640px) {
+            .section-title {
+              font-size: 24px;
+            }
           }
           .section-lead {
             margin-top: 12px;
             font-size: 16px;
             color: rgba(255, 255, 255, 0.75);
             max-width: 750px;
+          }
+          @media (max-width: 640px) {
+            .section-lead {
+              margin-top: 10px;
+              font-size: 15px;
+            }
           }
           .section-note {
             margin-top: 8px;
@@ -273,6 +480,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             display: flex;
             align-items: center;
             justify-content: space-between;
+          }
+          @media (max-width: 640px) {
+            .row-between {
+              flex-wrap: wrap;
+              gap: 8px;
+            }
           }
           .note-card {
             transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;

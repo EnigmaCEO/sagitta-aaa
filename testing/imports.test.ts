@@ -6,6 +6,8 @@ import { walletConnector, isValidEvmAddress, mockBalances } from "../lib/imports
 import { jsonConnector, parseJsonToRawPositions } from "../lib/imports/connectors/json_v1";
 import { inferRiskClass } from "../lib/imports/riskClassPriors";
 
+process.env.WALLET_IMPORT_DISABLE_ETHERSCAN = "1";
+
 test("csv header aliasing and value computation", () => {
   const csv = "Ticker,Name,Quantity,Price\nETH,Ethereum,2,2000\nUSDC,USD Coin,1000,1";
   const raw = parseCsvToRawPositions(csv);
@@ -49,6 +51,11 @@ test("wallet mock output deterministic", () => {
   const a = mockBalances("ethereum", "0x0000000000000000000000000000000000000000");
   const b = mockBalances("ethereum", "0x0000000000000000000000000000000000000000");
   assert.deepEqual(a, b);
+});
+
+test("wallet mock returns large token list", () => {
+  const raw = mockBalances("ethereum", "0x0000000000000000000000000000000000000000");
+  assert.ok(raw.length >= 200);
 });
 
 test("wallet preview returns assets", async () => {

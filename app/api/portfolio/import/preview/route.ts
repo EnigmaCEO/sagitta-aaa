@@ -17,6 +17,41 @@ export async function POST(req: Request) {
 
   const connectorId = String(body["connector_id"] || "");
   const payload = body["payload"];
+  if (connectorId === "wallet_evm_v1") {
+    const base = (process.env.AAA_API_BASE_URL || process.env.NEXT_PUBLIC_API_BASE_URL || "").trim();
+    if (!base) {
+      return Response.json(
+        { ok: false, summary: "Preview failed.", warnings: [], errors: ["AAA_API_BASE_URL not set."] },
+        { status: 500 }
+      );
+    }
+    const targetUrl = `${base.replace(/\/+$/, "")}/wallet/import/preview`;
+    try {
+      const upstream = await fetch(targetUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload ?? {}),
+      });
+      const text = await upstream.text();
+      let json: unknown = null;
+      try {
+        json = text ? JSON.parse(text) : null;
+      } catch {
+        json = null;
+      }
+      if (!upstream.ok) {
+        return Response.json(
+          { ok: false, summary: "Preview failed.", warnings: [], errors: [text || upstream.statusText] },
+          { status: upstream.status }
+        );
+      }
+      return Response.json(json ?? { ok: false, summary: "Preview failed.", warnings: [], errors: ["Invalid JSON response."] });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return Response.json({ ok: false, summary: "Preview failed.", warnings: [], errors: [msg] }, { status: 500 });
+    }
+  }
+
   const connector = getConnector(connectorId);
   if (!connector) {
     return Response.json(

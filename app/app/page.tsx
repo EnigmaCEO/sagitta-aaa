@@ -115,7 +115,60 @@ function humanizeLabel(input: string): string {
     .join(" ");
 }
 
+function normalizeWeightMap(weights: Record<string, number>): Record<string, number> {
+  const total = Object.values(weights).reduce((acc, v) => {
+    const n = typeof v === "number" && Number.isFinite(v) ? v : 0;
+    return acc + n;
+  }, 0);
+  if (!total || total <= 0) return { ...weights };
+  const out: Record<string, number> = {};
+  for (const [k, v] of Object.entries(weights)) {
+    const n = typeof v === "number" && Number.isFinite(v) ? v : 0;
+    out[k] = n / total;
+  }
+  return out;
+}
+
+function formatPercentFromWeight(value: number | null, digits = 2): string {
+  if (value === null || !Number.isFinite(value)) return "—";
+  const pct = value * 100;
+  return `${pct.toFixed(digits)}%`;
+}
+
 // CHANGED: humanize dropdown option display text (keeps underlying value intact)
+function formatWeightInputValue(value: number): string {
+  if (!Number.isFinite(value)) return "0";
+  const abs = Math.abs(value);
+  if (abs > 0 && abs < 1e-6) return value.toExponential(6);
+  return String(value);
+}
+
+function compareAllocationRowsForDisplay(
+  a: { id: string; delta: number | null; tgt?: number | null; cur?: number | null },
+  b: { id: string; delta: number | null; tgt?: number | null; cur?: number | null }
+): number {
+  // Primary sort: target weight descending (matches import-by-weight ranking).
+  const at = typeof a.tgt === "number" && Number.isFinite(a.tgt) ? a.tgt : 0;
+  const bt = typeof b.tgt === "number" && Number.isFinite(b.tgt) ? b.tgt : 0;
+  const tgtCmp = bt - at;
+  if (Math.abs(tgtCmp) > 1e-12) return tgtCmp;
+
+  const ad = typeof a.delta === "number" && Number.isFinite(a.delta) ? a.delta : 0;
+  const bd = typeof b.delta === "number" && Number.isFinite(b.delta) ? b.delta : 0;
+
+  // Secondary sort: larger moves first.
+  const absCmp = Math.abs(bd) - Math.abs(ad);
+  if (Math.abs(absCmp) > 1e-12) return absCmp;
+
+  // Then by source weight descending, then deterministic by id.
+  const ac = typeof a.cur === "number" && Number.isFinite(a.cur) ? a.cur : 0;
+  const bc = typeof b.cur === "number" && Number.isFinite(b.cur) ? b.cur : 0;
+  const curCmp = bc - ac;
+  if (Math.abs(curCmp) > 1e-12) return curCmp;
+
+  return String(a.id).localeCompare(String(b.id));
+}
+
 function humanizeOption(v: unknown): string {
   const s = String(v ?? "").trim();
   if (!s) return "";
@@ -213,7 +266,7 @@ interface Constraints {
 }
 
 const CONSTRAINT_DEFAULTS: Constraints = {
-  min_asset_weight: 0.05,
+  min_asset_weight: 0.0,
   max_asset_weight: 0.6,
   max_concentration: 0.7,
 };
@@ -575,6 +628,39 @@ type SavedPolicy = {
 const SHOW_DEV_PAYLOAD_PREVIEW = false;
 const EM_DASH = "\u2014";
 
+function escapeHtml(value: unknown): string {
+  const str = String(value ?? "");
+  return str
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function asStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => {
+      if (typeof item === "string") return item.trim();
+      if (item === null || item === undefined) return "";
+      try {
+        return JSON.stringify(item);
+      } catch {
+        return String(item);
+      }
+    })
+    .filter((item) => item.length > 0);
+}
+
+function formatSignedPercentFromWeight(value: number | null, digits = 2): string {
+  if (value === null || !Number.isFinite(value)) return EM_DASH;
+  const formatted = formatPercentFromWeight(value, digits);
+  if (formatted === EM_DASH) return formatted;
+  if (value > 0 && !formatted.startsWith("+")) return `+${formatted}`;
+  return formatted;
+}
+
 function coercePolicyPayload(raw: unknown): PolicyPayload {
   const obj = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
   const decisionType =
@@ -662,7 +748,7 @@ export default function Page() {
   const [importConnectorId, setImportConnectorId] = useState<ImportConnectorId>("csv_v1");
   const [importCsvText, setImportCsvText] = useState<string>("");
   const [importJsonText, setImportJsonText] = useState<string>("");
-  const [importWalletChain, setImportWalletChain] = useState<"ethereum" | "polygon" | "arbitrum">("ethereum");
+  const [importWalletChain, setImportWalletChain] = useState<"ethereum" | "polygon" | "arbitrum" | "auto">("ethereum");
   const [importWalletAddress, setImportWalletAddress] = useState<string>("");
   const [importPreview, setImportPreview] = useState<ImportPreviewResult | null>(null);
   const [importPreviewAssets, setImportPreviewAssets] = useState<ImportPreviewAsset[]>([]);
@@ -1550,12 +1636,85 @@ export default function Page() {
     return { portfolioLabel, policyLabel };
   }, [policies, policyNameDraft, savedPortfolios, selectedPolicyId, selectedSavedPortfolioId]);
 
+  const savePortfolioApi = useCallback(
+    async (val: Portfolio, opts?: { signal?: AbortSignal }) => {
+      if (!scenarioId) throw new Error("no scenario id");
+      return putPortfolio(scenarioId, val);
+    },
+    [scenarioId]
+  );
+
+  const saveConstraintsApi = useCallback(
+    async (val: Constraints, opts?: { signal?: AbortSignal }) => {
+      if (!scenarioId) throw new Error("no scenario id");
+      return putConstraints(scenarioId, val);
+    },
+    [scenarioId]
+  );
+
+  const saveRiskPostureApi = useCallback(
+    async (val: "conservative" | "neutral" | "aggressive", opts?: { signal?: AbortSignal }) => {
+      if (!scenarioId) throw new Error("no scenario id");
+      return putRiskPosture(scenarioId, val);
+    },
+    [scenarioId]
+  );
+
+  const saveSectorSentimentApi = useCallback(
+    async (val: string | Record<string, number>, opts?: { signal?: AbortSignal }) => {
+      if (!scenarioId) throw new Error("no scenario id");
+      return putSectorSentiment(scenarioId, val);
+    },
+    [scenarioId]
+  );
+
+  const saveInflowApi = useCallback(
+    async (val: number | null) => {
+      if (!scenarioId) throw new Error("no scenario id");
+      return putInflow(scenarioId, { capital_inflow_amount: Number(val ?? 0) });
+    },
+    [scenarioId]
+  );
+
+  const saveRegimeApi = useCallback(
+    async (val: Record<string, unknown>) => {
+      if (!scenarioId) throw new Error("no scenario id");
+      return putRegime(scenarioId, val);
+    },
+    [scenarioId]
+  );
+
   // CHANGE: ensure runTick refresh makes Decision Results appear reliably
   const onRunTick = useCallback(async () => {
     console.log("onRunTick called " + scenarioId);
     if (!scenarioId) return;
     setLoading(true);
     try {
+      if (portfolioDraft && portfolioTouched) {
+        await savePortfolioApi(portfolioDraft);
+        setPortfolioTouched(false);
+      }
+      if (constraintsDraft && constraintsTouched) {
+        await saveConstraintsApi(constraintsDraft);
+        setConstraintsTouched(false);
+      }
+      if (regimeDraft && regimeTouched) {
+        await saveRegimeApi(regimeDraft);
+        setRegimeTouched(false);
+      }
+      if (riskPostureTouched) {
+        await saveRiskPostureApi(riskPostureDraft);
+        setRiskPostureTouched(false);
+      }
+      if (sectorSentimentTouched) {
+        await saveSectorSentimentApi(sectorSentimentText);
+        setSectorSentimentTouched(false);
+      }
+      if (inflowTouched) {
+        await saveInflowApi(inflowDraft);
+        setInflowTouched(false);
+      }
+
       const selectedPolicy = selectedPolicyId ? policies.find((p) => p.id === selectedPolicyId) ?? null : null;
       const allocatorToUseRaw = selectedPolicy?.allocatorVersion ?? allocatorVersion;
       const allocatorToUse = allocatorToUseRaw === "default" ? "v1" : allocatorToUseRaw;
@@ -1628,16 +1787,24 @@ export default function Page() {
       setTickUiTouched(false);
 
       await Promise.all([loadScenario(), loadTicks(), loadScenarioTime()]);
+    } catch (e) {
+      console.error("Run tick failed", e);
+      setMessage(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
     }
   }, [
     scenarioId,
+    portfolioTouched,
+    constraintsTouched,
+    regimeTouched,
+    riskPostureTouched,
+    sectorSentimentTouched,
+    inflowTouched,
     canWrite,
     loadScenario,
     loadScenarioTime,
     loadTicks,
-    createDecisionRun,
     makeSyntheticTickFromDecision,
     getExecutionContextLabels,
     selectedSavedPortfolioId,
@@ -1645,57 +1812,31 @@ export default function Page() {
     portfolioDraft,
     constraintsDraft,
     regimeDraft,
+    riskPostureDraft,
+    sectorSentimentText,
+    inflowDraft,
+    savePortfolioApi,
+    saveConstraintsApi,
+    saveRegimeApi,
+    saveRiskPostureApi,
+    saveSectorSentimentApi,
+    saveInflowApi,
     runDecisionType,
     allocatorVersion,
     policyNameDraft,
     policies,
   ]);
 
-  const savePortfolioApi = useCallback(
-    async (val: Portfolio, opts?: { signal?: AbortSignal }) => {
-      if (!scenarioId) throw new Error("no scenario id");
-      return putPortfolio(scenarioId, val);
-    },
-    [scenarioId]
-  );
-
-  const saveConstraintsApi = useCallback(
-    async (val: Constraints, opts?: { signal?: AbortSignal }) => {
-      if (!scenarioId) throw new Error("no scenario id");
-      return putConstraints(scenarioId, val);
-    },
-    [scenarioId]
-  );
-
-  const saveRiskPostureApi = useCallback(
-    async (val: "conservative" | "neutral" | "aggressive", opts?: { signal?: AbortSignal }) => {
-      if (!scenarioId) throw new Error("no scenario id");
-      return putRiskPosture(scenarioId, val);
-    },
-    [scenarioId]
-  );
-
-  const saveSectorSentimentApi = useCallback(
-    async (val: string | Record<string, number>, opts?: { signal?: AbortSignal }) => {
-      if (!scenarioId) throw new Error("no scenario id");
-      return putSectorSentiment(scenarioId, val);
-    },
-    [scenarioId]
-  );
-
-  const saveInflowApi = useCallback(
-    async (val: number | null) => {
-      if (!scenarioId) throw new Error("no scenario id");
-      return putInflow(scenarioId, { capital_inflow_amount: Number(val ?? 0) });
-    },
-    [scenarioId]
-  );
-
   const constraintsValidationError = useMemo(() => {
     if (!constraintsDraft) return "Constraints not set.";
     const min = constraintsDraft.min_asset_weight;
     const max = constraintsDraft.max_asset_weight;
     const conc = constraintsDraft.max_concentration;
+    const uniqueAssetCount = new Set(
+      (portfolioDraft?.assets ?? [])
+        .map((a) => String(a.id ?? "").trim())
+        .filter(Boolean)
+    ).size;
     const isNum = (v: unknown) => typeof v === "number" && Number.isFinite(v);
 
     if (!isNum(min)) return "Minimum Asset Weight must be a number.";
@@ -1708,8 +1849,11 @@ export default function Page() {
 
     if (min! > max!) return "Minimum Asset Weight cannot exceed Maximum Asset Weight.";
     if (max! > conc!) return "Maximum Asset Weight cannot exceed Maximum Concentration.";
+    if (uniqueAssetCount > 0 && min! * uniqueAssetCount > 1) {
+      return `Minimum Asset Weight is infeasible for ${uniqueAssetCount} assets (must be <= ${(1 / uniqueAssetCount).toFixed(6)}).`;
+    }
     return null;
-  }, [constraintsDraft]);
+  }, [constraintsDraft, portfolioDraft]);
 
   const validateConstraints = useCallback(() => {
     if (!constraintsTouched) return false;
@@ -1818,14 +1962,6 @@ export default function Page() {
         void loadScenario();
       },
     }
-  );
-
-  const saveRegimeApi = useCallback(
-    async (val: Record<string, unknown>) => {
-      if (!scenarioId) throw new Error("no scenario id");
-      return putRegime(scenarioId, val);
-    },
-    [scenarioId]
   );
 
   // NOTE: your UI uses AllocatorVersion including "default"; schema starts at v1.
@@ -2180,7 +2316,8 @@ export default function Page() {
       const id = String(a.id ?? "").trim();
       if (!id) continue;
       const cw = typeof a.current_weight === "number" && Number.isFinite(a.current_weight) ? a.current_weight : 0;
-      out[id] = cw;
+      // Keep first occurrence to match backend allocator duplicate-id handling.
+      if (!(id in out)) out[id] = cw;
     }
     return out;
   }, [portfolioDraft]);
@@ -2426,11 +2563,2307 @@ export default function Page() {
   }, []);
 
   const onExportTick = useCallback(
-    (tick: Tick) => {
+    async (tick: Tick) => {
       const payload = buildExportPayload(tick);
-      downloadJson(`tick_${tick.tick_id || "unknown"}.json`, payload);
+      const t = tick as unknown as Record<string, unknown>;
+      const canonicalize = (value: unknown): string => {
+        if (value === null || typeof value !== "object") return JSON.stringify(value);
+        if (Array.isArray(value)) return `[${value.map((item) => canonicalize(item)).join(",")}]`;
+        const obj = value as Record<string, unknown>;
+        const keys = Object.keys(obj).sort();
+        return `{${keys.map((key) => `${JSON.stringify(key)}:${canonicalize(obj[key])}`).join(",")}}`;
+      };
+      const sha256Hex = async (input: string): Promise<string | null> => {
+        try {
+          if (!window.crypto?.subtle) return null;
+          const data = new TextEncoder().encode(input);
+          const digest = await window.crypto.subtle.digest("SHA-256", data);
+          return Array.from(new Uint8Array(digest))
+            .map((byte) => byte.toString(16).padStart(2, "0"))
+            .join("");
+        } catch {
+          return null;
+        }
+      };
+
+      const policySnapshot =
+        t["policy_snapshot"] && typeof t["policy_snapshot"] === "object"
+          ? (t["policy_snapshot"] as Record<string, unknown>)
+          : null;
+      const analysis =
+        t["analysis_summary"] && typeof t["analysis_summary"] === "object"
+          ? (t["analysis_summary"] as Record<string, unknown>)
+          : null;
+      const pruning =
+        t["pruning_summary"] && typeof t["pruning_summary"] === "object"
+          ? (t["pruning_summary"] as Record<string, unknown>)
+          : null;
+      const effects =
+        t["policy_effects"] && typeof t["policy_effects"] === "object"
+          ? (t["policy_effects"] as Record<string, unknown>)
+          : null;
+      const sensitivity =
+        t["policy_sensitivity"] && typeof t["policy_sensitivity"] === "object"
+          ? (t["policy_sensitivity"] as Record<string, unknown>)
+          : null;
+      const equivalence =
+        t["policy_equivalence"] && typeof t["policy_equivalence"] === "object"
+          ? (t["policy_equivalence"] as Record<string, unknown>)
+          : null;
+      const roleEffects =
+        t["role_effects"] && typeof t["role_effects"] === "object"
+          ? (t["role_effects"] as Record<string, unknown>)
+          : null;
+      const rolePolicy =
+        t["role_policy"] && typeof t["role_policy"] === "object"
+          ? (t["role_policy"] as Record<string, unknown>)
+          : null;
+      const explanationRaw =
+        t["ai_explanation"] && typeof t["ai_explanation"] === "object"
+          ? (t["ai_explanation"] as Record<string, unknown>)
+          : t["narrative"] && typeof t["narrative"] === "object"
+            ? (t["narrative"] as Record<string, unknown>)
+            : null;
+
+      const targetWeights = extractTargetWeightsFromTick(tick);
+      const priorWeightsRaw = t["prior_portfolio_weights"] ?? t["prior_target_weights"];
+      const priorWeights =
+        priorWeightsRaw && typeof priorWeightsRaw === "object" && !Array.isArray(priorWeightsRaw)
+          ? Object.fromEntries(
+              Object.entries(priorWeightsRaw as Record<string, unknown>).filter(
+                ([, v]) => typeof v === "number" && Number.isFinite(v),
+              ),
+            ) as Record<string, number>
+          : null;
+
+      const { rows, turnover } = buildAllocationRowsFromPrior(priorWeights, targetWeights);
+      const sortedRows = rows.slice().sort(compareAllocationRowsForDisplay);
+
+      const riskDelta = typeof analysis?.["risk_delta"] === "number" ? (analysis["risk_delta"] as number) : null;
+      const maxShiftAsset = typeof analysis?.["max_shift_asset"] === "string" ? (analysis["max_shift_asset"] as string) : null;
+      const maxShiftDelta = typeof analysis?.["max_shift_delta"] === "number" ? (analysis["max_shift_delta"] as number) : null;
+      const analysisNotes = asStringArray(analysis?.["notes"]);
+
+      const prunedAssets = asStringArray(pruning?.["pruned_assets"]);
+      const prunedCount =
+        typeof pruning?.["pruned_count"] === "number" ? (pruning["pruned_count"] as number) : prunedAssets.length;
+
+      const warnings = asStringArray(t["warnings"]);
+      const roleSummaryRaw = asStringArray(t["role_constraints_summary"]);
+      const roleStatus = typeof roleEffects?.["status"] === "string" ? (roleEffects["status"] as string) : null;
+      const roleBlockers = asStringArray(roleEffects?.["blockers"]);
+      const roleTransfers = Array.isArray(roleEffects?.["transfers"])
+        ? (roleEffects["transfers"] as Array<Record<string, unknown>>)
+        : [];
+      const roleSummary = Array.from(new Set(roleSummaryRaw.filter((item) => !!item)));
+      const hasDominanceLine = roleSummary.some((item) => item.toLowerCase().includes("core dominance"));
+      if (!hasDominanceLine && roleStatus) {
+        const statusLabel =
+          roleStatus === "applied"
+            ? "Core dominance applied."
+            : roleStatus === "blocked_by_constraints"
+              ? "Core dominance blocked by constraints."
+              : roleStatus === "not_needed"
+                ? "Core dominance not needed."
+                : `Core dominance status: ${roleStatus}`;
+        roleSummary.push(statusLabel);
+      }
+      if (roleBlockers.length) {
+        roleSummary.push(`Core dominance blockers: ${roleBlockers.join(", ")}`);
+      }
+      if (roleTransfers.length) {
+        roleSummary.push(`Core dominance transfers: ${roleTransfers.length}`);
+      }
+
+      const applied =
+        effects?.["applied_effects"] && typeof effects?.["applied_effects"] === "object"
+          ? (effects["applied_effects"] as Record<string, unknown>)
+          : null;
+      const erMult = typeof applied?.["expected_return_multiplier"] === "number" ? (applied["expected_return_multiplier"] as number) : null;
+      const volMult = typeof applied?.["volatility_multiplier"] === "number" ? (applied["volatility_multiplier"] as number) : null;
+      const riskMult = typeof applied?.["risk_budget_multiplier"] === "number" ? (applied["risk_budget_multiplier"] as number) : null;
+      const corrApplied =
+        typeof applied?.["correlation_penalty_applied"] === "boolean" ? (applied["correlation_penalty_applied"] as boolean) : null;
+      const liqApplied =
+        typeof applied?.["liquidity_penalty_applied"] === "boolean" ? (applied["liquidity_penalty_applied"] as boolean) : null;
+      const bindingFactors = asStringArray(sensitivity?.["binding_factors"]);
+
+      const weightDelta =
+        typeof sensitivity?.["weight_delta_l1_vs_baseline"] === "number"
+          ? (sensitivity["weight_delta_l1_vs_baseline"] as number)
+          : null;
+      const equivalent =
+        (typeof sensitivity?.["equivalent"] === "boolean" && (sensitivity["equivalent"] as boolean)) ||
+        (typeof equivalence?.["equivalent"] === "boolean" && (equivalence["equivalent"] as boolean)) ||
+        (weightDelta !== null && Math.abs(weightDelta) <= 1e-6);
+      const rankingChanged = !!sensitivity?.["ranking_changed"];
+      const pruningChanged = !!sensitivity?.["pruning_changed"];
+      const constraintBindingChanged = !!sensitivity?.["constraint_binding_changed"];
+      const normalizationDominated = !!sensitivity?.["normalization_dominated"];
+
+      const { value: allocatorVersion } = resolveAllocatorVersion(t);
+      const { label: policyLabel } = resolvePolicyRef(t);
+      const analyzerVersion = resolveAnalyzerVersion(t) ?? EM_DASH;
+      const impactDetails = buildPolicyImpactDetails({
+        version: allocatorVersion,
+        effects,
+        sensitivity,
+        policySnapshot,
+      });
+      const inactiveKnobReasons = impactDetails.inactiveKnobReasons;
+      const divergenceConditions = impactDetails.divergenceConditions;
+
+      const policySummary = (() => {
+        if (!impactDetails.effectsAvailable) return "No policy-level effects computed for this run.";
+        if (equivalent) {
+          if (bindingFactors.length === 0) return "No policy-level effects observed under current conditions.";
+          if (normalizationDominated || constraintBindingChanged) {
+            return "Policy parameters changed Allocator inputs, but final allocation remained unchanged due to normalization or binding constraints.";
+          }
+          return "Policy parameters did not alter final target weights under the current source portfolio.";
+        }
+        if (rankingChanged || pruningChanged) return "Policy settings changed asset ranking or pruning outcomes.";
+        if (constraintBindingChanged) return "Policy inputs were partially overridden by binding constraints.";
+        return "Policy parameters produced a measurable allocation change.";
+      })();
+
+      const policyNameDirect = typeof t["policy_name"] === "string" ? (t["policy_name"] as string).trim() : "";
+      const policyIdDirect = typeof t["policy_id"] === "string" ? (t["policy_id"] as string).trim() : "";
+      const rawPolicyContext = policyNameDirect || policyIdDirect || policyLabel || "";
+      const policyContext =
+        !rawPolicyContext ||
+        rawPolicyContext.toLowerCase() === "unknown" ||
+        rawPolicyContext.toLowerCase() === "(unsaved)"
+          ? "Policy Authority: System-Derived | Registration Status: Internal Policy"
+          : rawPolicyContext;
+
+      const uiContext =
+        t["_ui_context"] && typeof t["_ui_context"] === "object" ? (t["_ui_context"] as Record<string, unknown>) : null;
+      const portfolioContext =
+        uiContext && typeof uiContext["portfolioLabel"] === "string" && (uiContext["portfolioLabel"] as string).trim()
+          ? (uiContext["portfolioLabel"] as string)
+          : "(current)";
+      const portfolioId =
+        (uiContext && typeof uiContext["portfolioId"] === "string" && (uiContext["portfolioId"] as string).trim()) ||
+        (uiContext && typeof uiContext["portfolio_id"] === "string" && (uiContext["portfolio_id"] as string).trim()) ||
+        portfolioContext;
+
+      const decisionId = tick.tick_id || "unavailable";
+      const timestampUtc = tick.timestamp ? new Date(tick.timestamp).toISOString() : new Date().toISOString();
+      const timestampLabel = timestampUtc;
+      const exportedAt = new Date().toISOString();
+      const shortDecisionId = decisionId.length > 12 ? `${decisionId.slice(0, 12)}…` : decisionId;
+
+      const fingerprintOf = (input: string) => {
+        let hash = 2166136261;
+        for (let i = 0; i < input.length; i += 1) {
+          hash ^= input.charCodeAt(i);
+          hash += (hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24);
+        }
+        return (hash >>> 0).toString(16).padStart(8, "0");
+      };
+
+      const policyFingerprint = (() => {
+        const explicit =
+          (policySnapshot && typeof policySnapshot["policy_fingerprint"] === "string"
+            ? (policySnapshot["policy_fingerprint"] as string)
+            : null) ||
+          (policySnapshot && typeof policySnapshot["fingerprint"] === "string"
+            ? (policySnapshot["fingerprint"] as string)
+            : null) ||
+          (typeof t["policy_fingerprint"] === "string" ? (t["policy_fingerprint"] as string) : null);
+        if (explicit && explicit.trim()) return explicit.trim();
+        const basis =
+          policyIdDirect ||
+          policyNameDirect ||
+          (policySnapshot ? JSON.stringify(policySnapshot) : "") ||
+          policyContext ||
+          "policy";
+        return `POL-${fingerprintOf(basis)}`;
+      })();
+
+      const decisionFingerprint = (() => {
+        const explicit =
+          (typeof t["decision_hash"] === "string" ? (t["decision_hash"] as string) : null) ||
+          (typeof t["decision_fingerprint"] === "string" ? (t["decision_fingerprint"] as string) : null);
+        if (explicit && explicit.trim()) return explicit.trim();
+        return `DEC-${fingerprintOf(canonicalize(payload))}`;
+      })();
+      const payloadCanonical = canonicalize(payload);
+      const payloadHashSha = await sha256Hex(payloadCanonical);
+      const payloadHash = payloadHashSha ? payloadHashSha : `fnv1a-${fingerprintOf(payloadCanonical)}`;
+      const documentCanonical = canonicalize({
+        decision_id: decisionId,
+        policy_fingerprint: policyFingerprint,
+        allocator_version: allocatorVersion,
+        decision_fingerprint: decisionFingerprint,
+        execution_timestamp_utc: timestampUtc,
+        payload_hash: payloadHash,
+      });
+      const documentHashSha = await sha256Hex(documentCanonical);
+      const documentHash = documentHashSha ? documentHashSha : `fnv1a-${fingerprintOf(documentCanonical)}`;
+      const hashMethod = payloadHashSha && documentHashSha ? "SHA-256" : "FNV-1a checksum (crypto fallback)";
+      const sanitizeUnknownDisplay = (value: unknown): unknown => {
+        if (value === "unknown") return "system-derived";
+        if (Array.isArray(value)) return value.map((item) => sanitizeUnknownDisplay(item));
+        if (value && typeof value === "object") {
+          return Object.fromEntries(
+            Object.entries(value as Record<string, unknown>).map(([k, v]) => [k, sanitizeUnknownDisplay(v)]),
+          );
+        }
+        return value;
+      };
+      const payloadForDisplay = sanitizeUnknownDisplay(payload);
+
+      const rationaleBullets = asStringArray(explanationRaw?.["rationale_bullets"]);
+      const riskNotes = asStringArray(explanationRaw?.["risk_notes"]);
+      const decisionType =
+        typeof t["decision_type"] === "string" ? String(t["decision_type"]).toLowerCase() : "allocation";
+      const explainConfidence =
+        explanationRaw && typeof explanationRaw["confidence"] === "string"
+          ? (explanationRaw["confidence"] as string)
+          : "n/a";
+
+      const riskDirection = (() => {
+        if (riskDelta === null) return "Unknown";
+        const magnitude = Math.abs(riskDelta) < 0.01 ? "Low" : Math.abs(riskDelta) < 0.05 ? "Moderate" : "High";
+        if (riskDelta < -1e-6) return `Decrease (${magnitude})`;
+        if (riskDelta > 1e-6) return `Increase (${magnitude})`;
+        return "Flat (Low)";
+      })();
+
+      const volatilityDirection = (() => {
+        if (volMult === null) return "Flat";
+        if (volMult < 0.99) return "Down";
+        if (volMult > 1.01) return "Up";
+        return "Flat";
+      })();
+
+      const riskSummary =
+        t["risk_summary"] && typeof t["risk_summary"] === "object" ? (t["risk_summary"] as Record<string, unknown>) : null;
+      const riskPre =
+        riskSummary &&
+        riskSummary["pre"] &&
+        typeof riskSummary["pre"] === "object" &&
+        typeof (riskSummary["pre"] as Record<string, unknown>)["portfolio_volatility"] === "number"
+          ? ((riskSummary["pre"] as Record<string, unknown>)["portfolio_volatility"] as number)
+          : null;
+      const riskPost =
+        riskSummary &&
+        riskSummary["post"] &&
+        typeof riskSummary["post"] === "object" &&
+        typeof (riskSummary["post"] as Record<string, unknown>)["portfolio_volatility"] === "number"
+          ? ((riskSummary["post"] as Record<string, unknown>)["portfolio_volatility"] as number)
+          : null;
+      const riskVolDelta = riskPre !== null && riskPost !== null ? riskPost - riskPre : null;
+
+      const roleByAsset =
+        t["role_by_asset"] && typeof t["role_by_asset"] === "object"
+          ? (t["role_by_asset"] as Record<string, unknown>)
+          : null;
+      let sourceLiquidityWeight: number | null = null;
+      let targetLiquidityWeight: number | null = null;
+      if (roleByAsset) {
+        let sourceLiquidity = 0;
+        let targetLiquidity = 0;
+        for (const row of sortedRows) {
+          const roleRaw = roleByAsset[row.id];
+          const role = typeof roleRaw === "string" ? roleRaw.toLowerCase() : "";
+          if (role !== "liquidity") continue;
+          sourceLiquidity += typeof row.cur === "number" ? row.cur : 0;
+          targetLiquidity += typeof row.tgt === "number" ? row.tgt : 0;
+        }
+        sourceLiquidityWeight = sourceLiquidity;
+        targetLiquidityWeight = targetLiquidity;
+      }
+
+      const liquidityDirection = (() => {
+        if (sourceLiquidityWeight !== null && targetLiquidityWeight !== null) {
+          const sourceLiquidity = sourceLiquidityWeight;
+          const targetLiquidity = targetLiquidityWeight;
+          const delta = targetLiquidity - sourceLiquidity;
+          if (delta > 0.001) return "Up";
+          if (delta < -0.001) return "Down";
+        }
+        if (liqApplied === true) return "Down";
+        return "Flat";
+      })();
+
+      const turnoverClass = (() => {
+        if (!Number.isFinite(turnover)) return "Unknown";
+        if (turnover < 0.05) return "Low";
+        if (turnover < 0.15) return "Moderate";
+        return "High";
+      })();
+
+      const constraintStatus = (() => {
+        const scan = [...warnings, ...analysisNotes, ...bindingFactors, ...roleSummary].join(" ").toLowerCase();
+        if (/(violation|breach|infeasible|failed|error)/.test(scan)) return "Violated";
+        if (/(constraint|binding|blocked|penalty)/.test(scan)) return "Flagged";
+        return "None";
+      })();
+
+      const positiveRows = sortedRows
+        .filter((row) => typeof row.delta === "number" && row.delta > 1e-6)
+        .sort((a, b) => (b.delta as number) - (a.delta as number));
+      const negativeRows = sortedRows
+        .filter((row) => typeof row.delta === "number" && row.delta < -1e-6)
+        .sort((a, b) => (a.delta as number) - (b.delta as number));
+      const topIncreases = positiveRows.slice(0, 3);
+      const topDecreases = negativeRows.slice(0, 3);
+
+      const materialIds = new Set<string>([
+        ...topIncreases.map((row) => row.id),
+        ...topDecreases.map((row) => row.id),
+      ]);
+      const diversificationRows = sortedRows.filter((row) => !materialIds.has(row.id));
+      const diversificationCount = diversificationRows.length;
+      const diversificationTarget = diversificationRows.reduce((acc, row) => acc + (row.tgt ?? 0), 0);
+      const diversificationSource = diversificationRows.reduce((acc, row) => acc + (row.cur ?? 0), 0);
+
+      const largestIncrease = topIncreases[0] ?? null;
+      const largestDecrease = topDecreases[0] ?? null;
+      const exitedAssets = sortedRows
+        .filter((row) => typeof row.cur === "number" && row.cur > 1e-6 && row.tgt <= 1e-6)
+        .sort((a, b) => (b.cur as number) - (a.cur as number))
+        .slice(0, 5)
+        .map((row) => row.id);
+
+      const pendingRatification = !!(
+        t["pending_human_ratification"] ||
+        t["requires_human_ratification"] ||
+        t["human_ratification_required"]
+      );
+      const decisionMode =
+        typeof t["decision_mode"] === "string" && String(t["decision_mode"]).trim()
+          ? String(t["decision_mode"])
+          : decisionType === "simulation"
+            ? "Simulation"
+            : "Autonomous (policy-bound)";
+
+      const humanOverrideRequired =
+        pendingRatification || !!(t["human_override_required"] || t["override_required"]);
+
+      const escalationChurnRaw =
+        (policySnapshot && typeof policySnapshot["escalation_churn_pct"] === "number"
+          ? (policySnapshot["escalation_churn_pct"] as number)
+          : null) ??
+        (policySnapshot && typeof policySnapshot["max_churn_pct"] === "number"
+          ? (policySnapshot["max_churn_pct"] as number)
+          : null);
+      const escalationRiskRaw =
+        (policySnapshot && typeof policySnapshot["escalation_risk_delta"] === "number"
+          ? (policySnapshot["escalation_risk_delta"] as number)
+          : null) ??
+        (policySnapshot && typeof policySnapshot["max_risk_delta"] === "number"
+          ? (policySnapshot["max_risk_delta"] as number)
+          : null);
+
+      const escalationThreshold = `Churn > ${
+        escalationChurnRaw === null ? "20.00%" : `${(escalationChurnRaw * 100).toFixed(2)}%`
+      } or |Risk delta| > ${escalationRiskRaw === null ? "0.0500" : escalationRiskRaw.toFixed(4)}`;
+      const escalationChurnThreshold = escalationChurnRaw ?? 0.2;
+      const escalationRiskThreshold = escalationRiskRaw ?? 0.05;
+      const escalationThresholdBreached =
+        turnover > escalationChurnThreshold ||
+        (riskDelta !== null && Math.abs(riskDelta) > escalationRiskThreshold) ||
+        constraintStatus === "Violated";
+
+      const signer = (() => {
+        const explicit = [
+          t["signer"],
+          t["approved_by"],
+          t["approver"],
+          policySnapshot ? policySnapshot["signer"] : null,
+          policySnapshot ? policySnapshot["approver"] : null,
+        ];
+        for (const candidate of explicit) {
+          if (typeof candidate === "string" && candidate.trim()) return candidate.trim();
+        }
+        if (pendingRatification) return "DAO / IC / Trustee";
+        return "System";
+      })();
+
+      const decisionPurpose = (() => {
+        if (decisionType === "simulation") {
+          return "Scenario evaluation run to compare policy behavior before capital deployment.";
+        }
+        if (turnover >= 0.15) {
+          return "Stress-response rebalance triggered by material drift relative to target policy.";
+        }
+        if (roleStatus === "applied") {
+          return "Routine rebalance with dominance-control enforcement under active role policy.";
+        }
+        if (warnings.length > 0) {
+          return "Policy-bound rebalance executed with warning flags requiring review.";
+        }
+        return "Routine policy-bound rebalance to maintain mandate alignment.";
+      })();
+
+      const governanceStatus = (() => {
+        if (decisionType === "simulation") {
+          return `Simulation output under ${policyContext}; no execution was attempted.`;
+        }
+        if (pendingRatification) {
+          return `Pending human ratification under ${policyContext}.`;
+        }
+        return `Auto-executed under ${policyContext}.`;
+      })();
+
+      const actionRequired = pendingRatification || humanOverrideRequired || escalationThresholdBreached ? "Escalate" : "Acknowledge";
+      const actionType = (() => {
+        if (decisionType === "simulation") return "Informational Review";
+        if (humanOverrideRequired || pendingRatification) return "Ratification Review";
+        if (escalationThresholdBreached) return "Escalation Review";
+        return "Acknowledgment";
+      })();
+      const decisionDisposition = (() => {
+        if (decisionType === "simulation") return "Informational";
+        if (humanOverrideRequired || pendingRatification) return "Pending Ratification";
+        if (escalationThresholdBreached) return "Escalated";
+        return "Approved Under Policy Authority";
+      })();
+      const finalExecutionStatus = (() => {
+        if (decisionType === "simulation") return "Scenario Output Only (No Execution)";
+        if (pendingRatification) return "Pending Human Ratification";
+        return "Executed Under Policy Authority";
+      })();
+      const decisionStatusStamp = pendingRatification
+        ? "Decision Status: Pending Governance Confirmation"
+        : decisionType === "simulation"
+          ? "Decision Status: Simulation Output"
+          : "Decision Status: Executed (Policy-Bound)";
+      const authorityOfRecord = signer === "System" ? "Policy Owner (delegated to autonomous execution)" : signer;
+      const overrideWindow = (() => {
+        if (decisionType === "simulation") return "Not applicable";
+        const explicitWindowRaw = t["override_window_hours"];
+        const explicitWindow =
+          typeof explicitWindowRaw === "number" && Number.isFinite(explicitWindowRaw) && explicitWindowRaw > 0
+            ? explicitWindowRaw
+            : null;
+        if (humanOverrideRequired || pendingRatification) return "Open until ratification decision is recorded";
+        if (escalationThresholdBreached) {
+          return explicitWindow !== null ? `${explicitWindow.toFixed(0)}h escalation review window` : "Open during escalation review";
+        }
+        return "Closed (no override required under current thresholds)";
+      })();
+      const attestationStatus = (() => {
+        const explicit = t["attestation_status"];
+        if (typeof explicit === "string" && explicit.trim()) return explicit.trim();
+        return payloadHashSha && documentHashSha ? "Attested (deterministic hash available)" : "Unattested (fallback checksum)";
+      })();
+      const attestationAuthority = (() => {
+        const explicit = t["certification_authority"] || t["attestation_authority"] || t["certificationAuthority"];
+        if (typeof explicit === "string" && explicit.trim()) return explicit.trim();
+        return "Sagitta AAA Internal Attestation";
+      })();
+      const signingKeyId = (() => {
+        const explicit = t["signing_key_id"] || t["key_id"] || t["signingKeyId"];
+        if (typeof explicit === "string" && explicit.trim()) return explicit.trim();
+        return "INTERNAL-UNSPECIFIED";
+      })();
+      const signatureTimestampUtc = (() => {
+        const explicit = t["signed_at"] || t["signature_timestamp_utc"];
+        if (typeof explicit === "string" && explicit.trim()) return explicit.trim();
+        return timestampUtc;
+      })();
+
+      const riskOutcome = (() => {
+        if (riskDelta === null) return "Risk outcome unavailable from payload.";
+        if (riskDelta < -1e-6) return "Portfolio risk reduced.";
+        if (riskDelta > 1e-6) return "Portfolio risk increased.";
+        return "Portfolio risk unchanged.";
+      })();
+
+      const decisionConfidence = (() => {
+        if (constraintStatus === "Violated") return "Low";
+        if (constraintStatus === "Flagged" || turnoverClass === "High" || escalationThresholdBreached) return "Moderate";
+        return "High";
+      })();
+      const confidenceProfile = (() => {
+        if (decisionConfidence === "High") {
+          return { tier: "Tier I", conviction: "High", index: 0.82 };
+        }
+        if (decisionConfidence === "Moderate") {
+          return { tier: "Tier II", conviction: "Medium", index: 0.62 };
+        }
+        return { tier: "Tier III", conviction: "Low", index: 0.38 };
+      })();
+
+      const primaryExposure = (() => {
+        if (!maxShiftAsset || maxShiftDelta === null) return "No dominant single-asset shift recorded.";
+        const shift = `${maxShiftAsset} ${formatSignedPercentFromWeight(maxShiftDelta, 2)}`;
+        if (maxShiftDelta < -1e-6) return `Concentration unwind (${shift})`;
+        if (maxShiftDelta > 1e-6) return `Concentration build (${shift})`;
+        return `Neutral shift (${shift})`;
+      })();
+
+      const outcomeStatement = `Capital reallocated: ${formatPercentFromWeight(turnover, 2)}. Risk direction: ${riskDirection}. Volatility direction: ${volatilityDirection}. Liquidity direction: ${liquidityDirection}.`;
+      const riskStatement = `Risk direction: ${riskDirection}. Volatility direction: ${volatilityDirection}. Liquidity direction: ${liquidityDirection}. Turnover classification: ${turnoverClass} (${formatPercentFromWeight(
+        turnover,
+        2,
+      )}). Constraint status: ${constraintStatus}.`;
+      const guardrailStatement = (() => {
+        if (riskVolDelta === null) {
+          return "Based on deterministic guardrails, this decision remained within approved policy thresholds.";
+        }
+        const deltaPp = Math.abs(riskVolDelta * 100);
+        if (riskVolDelta < -1e-6) {
+          return `Based on deterministic guardrails, this decision reduced modeled volatility by ${deltaPp.toFixed(2)}pp.`;
+        }
+        if (riskVolDelta > 1e-6) {
+          return `Based on deterministic guardrails, this decision increased modeled volatility by ${deltaPp.toFixed(2)}pp within escalation thresholds.`;
+        }
+        return "Based on deterministic guardrails, this decision held modeled volatility flat.";
+      })();
+      const boardActionStatement = (() => {
+        if (decisionType === "simulation") {
+          return "Action: Informational review. Execution: none.";
+        }
+        if (pendingRatification || humanOverrideRequired) {
+          return "Action: Ratification review. Execution: pending governance confirmation.";
+        }
+        if (escalationThresholdBreached) {
+          return "Action: Escalation review. Execution: completed under policy authority.";
+        }
+        return "Action: Acknowledge. Execution: completed under policy authority.";
+      })();
+      const whyThisMatters = (() => {
+        const concentrationNarrative =
+          largestDecrease && largestDecrease.delta !== null
+            ? `Largest concentration unwind: ${largestDecrease.id} (${formatSignedPercentFromWeight(largestDecrease.delta, 2)}).`
+            : "Largest concentration unwind: none.";
+        const liquidityNarrative =
+          liquidityDirection === "Up"
+            ? "Liquidity exposure increased."
+            : liquidityDirection === "Down"
+              ? "Liquidity exposure declined."
+              : "Liquidity exposure stable.";
+        const volatilityNarrative =
+          volatilityDirection === "Down"
+            ? "Portfolio volatility decreased."
+            : volatilityDirection === "Up"
+              ? "Portfolio volatility increased."
+              : "Portfolio volatility stable.";
+        return `${concentrationNarrative} ${liquidityNarrative} ${volatilityNarrative}`;
+      })();
+      const maxSourceWeight = sortedRows.reduce((acc, row) => Math.max(acc, row.cur ?? 0), 0);
+      const maxTargetWeight = sortedRows.reduce((acc, row) => Math.max(acc, row.tgt ?? 0), 0);
+      const concentrationReduction = Math.max(0, maxSourceWeight - maxTargetWeight);
+      const strategicImpactBullets = [
+        `Concentration risk ${concentrationReduction > 1e-6 ? `reduced by ${formatPercentFromWeight(concentrationReduction, 2)}` : "remained within prior bounds"}.`,
+        riskVolDelta === null
+          ? "Portfolio volatility delta unavailable in this payload."
+          : `Portfolio volatility ${riskVolDelta < 0 ? "decreased" : riskVolDelta > 0 ? "increased" : "remained stable"} by ${Math.abs(riskVolDelta * 100).toFixed(
+              2,
+            )}pp.`,
+        targetLiquidityWeight === null
+          ? "Liquidity allocation could not be quantified from role mapping."
+          : `Liquidity allocation ${liquidityDirection === "Up" ? "increased" : liquidityDirection === "Down" ? "decreased" : "was maintained"} to ${formatPercentFromWeight(targetLiquidityWeight, 2)}.`,
+        escalationThresholdBreached
+          ? `Constraint thresholds triggered (${escalationThreshold}).`
+          : `Constraint thresholds not triggered (${escalationThreshold}).`,
+      ];
+      const finalVerdictStatus = actionRequired === "Acknowledge" ? "Action Justified" : "Action Escalated for Governance Review";
+      const finalVerdictReasoning =
+        constraintStatus === "None"
+          ? "Reasoning Within Doctrine"
+          : "Reasoning Within Doctrine (Constraint and escalation signals recorded)";
+      const finalVerdictImpact = (() => {
+        if (largestDecrease && largestDecrease.delta !== null) {
+          return `${Math.abs((largestDecrease.delta ?? 0) * 100).toFixed(2)}% reduced exposure to ${largestDecrease.id}.`;
+        }
+        if (largestIncrease && largestIncrease.delta !== null) {
+          return `${Math.abs((largestIncrease.delta ?? 0) * 100).toFixed(2)}% increased exposure to ${largestIncrease.id}.`;
+        }
+        return `Net turnover ${formatPercentFromWeight(turnover, 2)} with no single dominant asset shift.`;
+      })();
+      const nextReviewLine =
+        allocatorVersion === "v1"
+          ? "Sagitta Allocator v2 strategy refinement scheduled."
+          : `Sagitta Allocator ${allocatorVersion} strategy refinement scheduled.`;
+      const constraintsFromPolicy =
+        policySnapshot && typeof policySnapshot["constraints"] === "object"
+          ? (policySnapshot["constraints"] as Record<string, unknown>)
+          : null;
+      const maxAssetThreshold =
+        constraintsFromPolicy && typeof constraintsFromPolicy["max_asset_weight"] === "number"
+          ? (constraintsFromPolicy["max_asset_weight"] as number)
+          : null;
+      const minAssetThreshold =
+        constraintsFromPolicy && typeof constraintsFromPolicy["min_asset_weight"] === "number"
+          ? (constraintsFromPolicy["min_asset_weight"] as number)
+          : null;
+      const maxConcentrationThreshold =
+        constraintsFromPolicy && typeof constraintsFromPolicy["max_concentration"] === "number"
+          ? (constraintsFromPolicy["max_concentration"] as number)
+          : null;
+      const observedMaxAssetWeight = sortedRows.reduce((acc, row) => Math.max(acc, row.tgt ?? 0), 0);
+      const observedMaxConcentration = sortedRows.reduce((acc, row) => Math.max(acc, row.tgt ?? 0), 0);
+      const observedMinActiveWeight = sortedRows.reduce((acc, row) => {
+        const value = row.tgt ?? 0;
+        if (value <= 1e-8) return acc;
+        return Math.min(acc, value);
+      }, Number.POSITIVE_INFINITY);
+      const minActiveWeight = Number.isFinite(observedMinActiveWeight) ? observedMinActiveWeight : 0;
+      const buildConstraintStatus = (
+        observed: number,
+        threshold: number | null,
+        direction: "max" | "min",
+      ): "Pass" | "Flagged" | "Violated" => {
+        if (threshold === null) return "Flagged";
+        if (direction === "max") {
+          if (observed > threshold + 1e-6) return "Violated";
+          if (observed > threshold * 0.95) return "Flagged";
+          return "Pass";
+        }
+        if (observed + 1e-6 < threshold) return "Violated";
+        if (observed < threshold * 1.05) return "Flagged";
+        return "Pass";
+      };
+      const constraintMatrix = [
+        {
+          name: "Max Asset Weight",
+          threshold: maxAssetThreshold,
+          observed: observedMaxAssetWeight,
+          status: buildConstraintStatus(observedMaxAssetWeight, maxAssetThreshold, "max"),
+          evidence: "Target allocation",
+        },
+        {
+          name: "Max Concentration",
+          threshold: maxConcentrationThreshold,
+          observed: observedMaxConcentration,
+          status: buildConstraintStatus(observedMaxConcentration, maxConcentrationThreshold, "max"),
+          evidence: "Largest target holding",
+        },
+        {
+          name: "Min Active Asset Weight",
+          threshold: minAssetThreshold,
+          observed: minActiveWeight,
+          status: buildConstraintStatus(minActiveWeight, minAssetThreshold, "min"),
+          evidence: "Smallest non-zero target holding",
+        },
+        {
+          name: "Escalation Churn Threshold",
+          threshold: escalationChurnThreshold,
+          observed: turnover,
+          status: buildConstraintStatus(turnover, escalationChurnThreshold, "max"),
+          evidence: "Turnover L1",
+        },
+        {
+          name: "Escalation Risk Delta Threshold",
+          threshold: escalationRiskThreshold,
+          observed: riskDelta === null ? 0 : Math.abs(riskDelta),
+          status: buildConstraintStatus(riskDelta === null ? 0 : Math.abs(riskDelta), escalationRiskThreshold, "max"),
+          evidence: "|Risk delta|",
+        },
+      ];
+
+      const deterministicExplanation = `Sagitta Allocator re-ranked assets using policy-bound return, volatility, and role effects. ${
+        roleStatus === "applied"
+          ? "Dominance penalties were applied to concentration-heavy assets and redistributed toward role-compliant targets."
+          : "No dominance override was applied; scoring proceeded under baseline role constraints."
+      } ${prunedCount > 0 ? `It pruned ${prunedCount} low-viability asset(s) before normalization.` : "No assets were pruned before normalization."} ${constraintStatus === "None" ? "No hard constraint violations were detected." : "Constraint pressure signals were emitted for governance review."}`;
+
+      const explainSummary =
+        explanationRaw && typeof explanationRaw["summary"] === "string"
+          ? (explanationRaw["summary"] as string)
+          : deterministicExplanation;
+
+      const explanationRationale =
+        rationaleBullets.length > 0
+          ? rationaleBullets
+          : [
+              "Sagitta Allocator score composition reflected policy multipliers and role effects.",
+              prunedCount > 0 ? `Pruning removed ${prunedCount} low-viability asset(s).` : "No pruning step changed asset eligibility.",
+              constraintStatus === "None"
+                ? "Constraint set remained within bounds for the selected target."
+                : "Constraint-related flags were emitted and should be reviewed by governance.",
+            ];
+      type ExceptionRow = {
+        code: string;
+        severity: "Low" | "Medium" | "High";
+        signal: string;
+        source: "warning" | "analysis" | "binding";
+        action: string;
+      };
+      const exceptionRows: ExceptionRow[] = (() => {
+        const dedupe = new Set<string>();
+        const rowsOut: ExceptionRow[] = [];
+        const pushSignal = (signalRaw: string, source: ExceptionRow["source"]) => {
+          const signal = signalRaw.trim();
+          if (!signal) return;
+          const key = `${source}:${signal.toLowerCase()}`;
+          if (dedupe.has(key)) return;
+          dedupe.add(key);
+          const lower = signal.toLowerCase();
+          const severity: ExceptionRow["severity"] = /(violation|breach|error|failed|infeasible)/.test(lower)
+            ? "High"
+            : /(constraint|binding|blocked|penalty|pruned|escalat)/.test(lower)
+              ? "Medium"
+              : "Low";
+          const action =
+            severity === "High"
+              ? "Immediate governance review and approval hold."
+              : severity === "Medium"
+                ? "Review in governance committee and confirm no override required."
+                : "Record for audit trail; no immediate action.";
+          const code = signal
+            .replace(/[^A-Za-z0-9]+/g, "_")
+            .replace(/^_+|_+$/g, "")
+            .slice(0, 64)
+            .toUpperCase();
+          rowsOut.push({ code: code || "SIGNAL", severity, signal, source, action });
+        };
+        warnings.forEach((w) => pushSignal(w, "warning"));
+        analysisNotes.forEach((n) => pushSignal(n, "analysis"));
+        bindingFactors.forEach((b) => pushSignal(b, "binding"));
+        if (!warnings.length && !analysisNotes.length && !bindingFactors.length) {
+          rowsOut.push({
+            code: "NO_EXCEPTION_SIGNALS",
+            severity: "Low",
+            signal: "No exception signals detected in warning, analysis, or binding channels.",
+            source: "analysis",
+            action: "No escalation action required.",
+          });
+        }
+        return rowsOut;
+      })();
+
+      const explanationRiskNotes =
+        riskNotes.length > 0
+          ? riskNotes
+          : [
+              riskDelta === null
+                ? "Risk delta metric unavailable in run payload."
+                : riskDelta < 0
+                  ? "Net risk trend moved lower versus source weights."
+                  : riskDelta > 0
+                    ? "Net risk trend moved higher versus source weights."
+                    : "Risk trend remained effectively unchanged.",
+            ];
+
+      const asList = (items: string[], emptyLabel = "None.") =>
+        items.length
+          ? `<ul>${items.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`
+          : `<div class="muted">${escapeHtml(emptyLabel)}</div>`;
+      const renderDeltaRows = (rowsForSection: Array<{ id: string; cur: number | null; tgt: number; delta: number | null }>) =>
+        rowsForSection.length
+          ? rowsForSection
+              .map((row) => {
+                const deltaClass =
+                  typeof row.delta === "number"
+                    ? row.delta > 0
+                      ? "positive"
+                      : row.delta < 0
+                        ? "negative"
+                        : "neutral"
+                    : "neutral";
+                return `
+                <tr>
+                  <td>${escapeHtml(row.id)}</td>
+                  <td class="num">${escapeHtml(formatPercentFromWeight(row.cur, 2))}</td>
+                  <td class="num">${escapeHtml(formatPercentFromWeight(row.tgt, 2))}</td>
+                  <td class="num ${deltaClass}">${escapeHtml(formatSignedPercentFromWeight(row.delta, 2))}</td>
+                </tr>`;
+              })
+              .join("")
+          : `<tr><td colspan="4" class="muted">None.</td></tr>`;
+      const renderConstraintRows = () =>
+        constraintMatrix
+          .map((row) => {
+            const statusClass = row.status === "Pass" ? "status-pass" : row.status === "Flagged" ? "status-flagged" : "status-violated";
+            return `
+              <tr>
+                <td>${escapeHtml(row.name)}</td>
+                <td class="num">${escapeHtml(row.threshold === null ? EM_DASH : formatPercentFromWeight(row.threshold, 2))}</td>
+                <td class="num">${escapeHtml(formatPercentFromWeight(row.observed, 2))}</td>
+                <td class="num ${statusClass}">${escapeHtml(row.status)}</td>
+                <td>${escapeHtml(row.evidence)}</td>
+              </tr>
+            `;
+          })
+          .join("");
+      const renderExceptionRows = () =>
+        exceptionRows
+          .map((row) => {
+            const severityClass = row.severity === "High" ? "status-violated" : row.severity === "Medium" ? "status-flagged" : "status-pass";
+            return `
+              <tr>
+                <td>${escapeHtml(row.code)}</td>
+                <td class="${severityClass}">${escapeHtml(row.severity)}</td>
+                <td>${escapeHtml(row.signal)}</td>
+                <td>${escapeHtml(row.source)}</td>
+                <td>${escapeHtml(row.action)}</td>
+              </tr>
+            `;
+          })
+          .join("");
+
+      const fullAllocationRowsHtml = sortedRows.length
+        ? sortedRows
+            .map((row, idx) => {
+              const deltaClass =
+                typeof row.delta === "number" ? (row.delta > 0 ? "positive" : row.delta < 0 ? "negative" : "neutral") : "neutral";
+              return `
+                <tr>
+                  <td>${idx + 1}</td>
+                  <td>${escapeHtml(row.id)}</td>
+                  <td class="num">${escapeHtml(formatPercentFromWeight(row.cur, 2))}</td>
+                  <td class="num">${escapeHtml(formatPercentFromWeight(row.tgt, 2))}</td>
+                  <td class="num ${deltaClass}">${escapeHtml(formatSignedPercentFromWeight(row.delta, 2))}</td>
+                </tr>`;
+            })
+            .join("")
+        : `<tr><td colspan="5" class="muted">No allocation rows available.</td></tr>`;
+
+      const topIncreaseRowsHtml = renderDeltaRows(topIncreases);
+      const topDecreaseRowsHtml = renderDeltaRows(topDecreases);
+      const brandLogoUrl = `${window.location.origin}/logo-black.png`;
+
+      const chartPalette = ["#0b4de8", "#2563eb", "#7c3aed", "#16a34a", "#f59e0b", "#ef4444", "#14b8a6", "#64748b"];
+      const shortId = (id: string, max = 16) => (id.length > max ? `${id.slice(0, max - 1)}…` : id);
+
+      const turnoverClassificationTable = `
+        <table>
+          <thead>
+            <tr>
+              <th>Metric</th>
+              <th class="num">Value</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Turnover</td>
+              <td class="num">${escapeHtml(formatPercentFromWeight(turnover, 2))}</td>
+            </tr>
+            <tr>
+              <td>Classification</td>
+              <td class="num">${escapeHtml(turnoverClass)}</td>
+            </tr>
+            <tr>
+              <td>Threshold Breach</td>
+              <td class="num ${escapeHtml(escalationThresholdBreached ? "status-violated" : "status-pass")}">${escapeHtml(
+                escalationThresholdBreached ? "Yes" : "No",
+              )}</td>
+            </tr>
+            <tr>
+              <td>Escalation Trigger</td>
+              <td class="num">${escapeHtml(escalationThreshold)}</td>
+            </tr>
+          </tbody>
+        </table>
+      `;
+
+      const volatilityBarsSvg = (() => {
+        if (riskPre === null || riskPost === null) {
+          return `<div class="muted">Pre/Post volatility metrics are not available in this payload.</div>`;
+        }
+        const width = 760;
+        const height = 170;
+        const chartX = 170;
+        const chartY = 26;
+        const chartW = 540;
+        const rowH = 44;
+        const maxVal = Math.max(riskPre, riskPost, 1e-6);
+        const preW = (riskPre / maxVal) * chartW;
+        const postW = (riskPost / maxVal) * chartW;
+        const deltaPctPoints = (riskPost - riskPre) * 100;
+        const deltaColor = deltaPctPoints < 0 ? "#157347" : deltaPctPoints > 0 ? "#b02a37" : "#475569";
+        return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Pre versus post volatility">
+          <text x="18" y="18" font-size="12" fill="#475569" font-family="Segoe UI, Inter, Arial, sans-serif">Pre vs post portfolio volatility (delta in pp)</text>
+          <text x="18" y="${chartY + 16}" font-size="12" fill="#334155" font-family="Segoe UI, Inter, Arial, sans-serif">Pre-volatility</text>
+          <rect x="${chartX}" y="${chartY + 4}" width="${preW}" height="16" rx="6" fill="#64748b" />
+          <text x="${chartX + preW + 8}" y="${chartY + 17}" font-size="12" fill="#334155" font-family="Segoe UI, Inter, Arial, sans-serif">${(riskPre * 100).toFixed(
+            2,
+          )}%</text>
+
+          <text x="18" y="${chartY + rowH + 16}" font-size="12" fill="#334155" font-family="Segoe UI, Inter, Arial, sans-serif">Post-volatility</text>
+          <rect x="${chartX}" y="${chartY + rowH + 4}" width="${postW}" height="16" rx="6" fill="#0b4de8" />
+          <text x="${chartX + postW + 8}" y="${chartY + rowH + 17}" font-size="12" fill="#334155" font-family="Segoe UI, Inter, Arial, sans-serif">${(
+            riskPost * 100
+          ).toFixed(2)}%</text>
+
+          <text x="${chartX}" y="${chartY + rowH + 48}" font-size="12" fill="${deltaColor}" font-family="Segoe UI, Inter, Arial, sans-serif" font-weight="700">Delta: ${deltaPctPoints.toFixed(
+            2,
+          )}pp</text>
+        </svg>`;
+      })();
+
+      const materialMoverRows = [...topIncreases, ...topDecreases]
+        .filter((row) => typeof row.delta === "number" && Number.isFinite(row.delta) && Math.abs(row.delta) > 1e-8)
+        .sort((a, b) => Math.abs((b.delta as number) ?? 0) - Math.abs((a.delta as number) ?? 0))
+        .slice(0, 10);
+
+      const materialMoversSvg = (() => {
+        if (!materialMoverRows.length) return `<div class="muted">No material mover data available.</div>`;
+        const width = 760;
+        const rowH = 26;
+        const height = 62 + materialMoverRows.length * rowH;
+        const centerX = 380;
+        const maxBarW = 220;
+        const maxAbs = Math.max(...materialMoverRows.map((row) => Math.abs((row.delta as number) ?? 0)), 0.0001);
+        const rowsSvg = materialMoverRows
+          .map((row, idx) => {
+            const delta = (row.delta as number) ?? 0;
+            const barW = Math.max(1, (Math.abs(delta) / maxAbs) * maxBarW);
+            const y = 40 + idx * rowH;
+            const barX = delta >= 0 ? centerX : centerX - barW;
+            const barColor = delta >= 0 ? "#157347" : "#b02a37";
+            return `
+              <text x="18" y="${y + 5}" font-size="12" fill="#0f172a" font-family="Segoe UI, Inter, Arial, sans-serif">${escapeHtml(shortId(row.id, 20))}</text>
+              <rect x="${barX}" y="${y - 8}" width="${barW}" height="14" rx="5" fill="${barColor}" opacity="0.86" />
+              <text x="742" y="${y + 5}" text-anchor="end" font-size="12" fill="${barColor}" font-family="Segoe UI, Inter, Arial, sans-serif">${escapeHtml(
+                formatSignedPercentFromWeight(delta, 2),
+              )}</text>
+            `;
+          })
+          .join("");
+
+        return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Material increases and decreases">
+          <text x="18" y="20" font-size="12" fill="#475569" font-family="Segoe UI, Inter, Arial, sans-serif">Top material allocation shifts (increases and decreases)</text>
+          <line x1="${centerX}" y1="28" x2="${centerX}" y2="${height - 10}" stroke="#94a3b8" stroke-width="1.5" />
+          <text x="${centerX - 8}" y="20" text-anchor="end" font-size="11" fill="#64748b" font-family="Segoe UI, Inter, Arial, sans-serif">Decrease</text>
+          <text x="${centerX + 8}" y="20" font-size="11" fill="#64748b" font-family="Segoe UI, Inter, Arial, sans-serif">Increase</text>
+          ${rowsSvg}
+        </svg>`;
+      })();
+
+      const concentrationSvg = (() => {
+        const ranked = sortedRows
+          .map((row) => {
+            const source = typeof row.cur === "number" && Number.isFinite(row.cur) ? Math.max(0, row.cur) : 0;
+            const target = typeof row.tgt === "number" && Number.isFinite(row.tgt) ? Math.max(0, row.tgt) : 0;
+            return { id: row.id, source, target, max: Math.max(source, target) };
+          })
+          .filter((row) => row.max > 0)
+          .sort((a, b) => b.max - a.max);
+
+        if (!ranked.length) return `<div class="muted">No concentration data available.</div>`;
+
+        const top = ranked.slice(0, 6);
+        const rest = ranked.slice(6).reduce(
+          (acc, row) => {
+            acc.source += row.source;
+            acc.target += row.target;
+            return acc;
+          },
+          { source: 0, target: 0 },
+        );
+        const segments = [
+          ...top.map((row) => ({ label: row.id, source: row.source, target: row.target })),
+          ...(rest.source > 1e-8 || rest.target > 1e-8 ? [{ label: "Diversification basket", source: rest.source, target: rest.target }] : []),
+        ];
+
+        const width = 760;
+        const height = 220;
+        const barX = 130;
+        const barW = 560;
+        const barH = 20;
+
+        const legendSvg = segments
+          .slice(0, 8)
+          .map((segment, idx) => {
+            const x = 18 + (idx % 4) * 180;
+            const y = 136 + Math.floor(idx / 4) * 24;
+            const color = chartPalette[idx % chartPalette.length];
+            return `
+              <rect x="${x}" y="${y - 10}" width="12" height="12" rx="2" fill="${color}" />
+              <text x="${x + 18}" y="${y}" font-size="11" fill="#334155" font-family="Segoe UI, Inter, Arial, sans-serif">${escapeHtml(shortId(segment.label, 18))}</text>
+            `;
+          })
+          .join("");
+
+        const renderStack = (kind: "source" | "target", y: number, label: string) => {
+          let cursor = barX;
+          const parts = segments
+            .map((segment, idx) => {
+              const v = kind === "source" ? segment.source : segment.target;
+              const w = Math.max(0, Math.min(barW, v * barW));
+              const x = cursor;
+              cursor += w;
+              if (w <= 0.2) return "";
+              return `<rect x="${x}" y="${y}" width="${w}" height="${barH}" fill="${chartPalette[idx % chartPalette.length]}" />`;
+            })
+            .join("");
+          return `
+            <text x="18" y="${y + 14}" font-size="12" fill="#334155" font-family="Segoe UI, Inter, Arial, sans-serif">${escapeHtml(label)}</text>
+            <rect x="${barX}" y="${y}" width="${barW}" height="${barH}" rx="6" fill="none" stroke="#94a3b8" stroke-width="1" />
+            ${parts}
+          `;
+        };
+
+        return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Source vs target concentration">
+          <text x="18" y="20" font-size="12" fill="#475569" font-family="Segoe UI, Inter, Arial, sans-serif">Source vs target concentration profile (top holdings + diversification basket)</text>
+          ${renderStack("source", 46, "Source allocation")}
+          ${renderStack("target", 88, "Target allocation")}
+          <text x="${barX}" y="32" font-size="10" fill="#64748b" font-family="Segoe UI, Inter, Arial, sans-serif">0%</text>
+          <text x="${barX + barW}" y="32" text-anchor="end" font-size="10" fill="#64748b" font-family="Segoe UI, Inter, Arial, sans-serif">100%</text>
+          ${legendSvg}
+        </svg>`;
+      })();
+
+      const riskSignalsSvg = (() => {
+        const width = 760;
+        const height = 130;
+        const signalDir = riskDelta === null ? "Flat" : riskDelta < 0 ? "Down" : riskDelta > 0 ? "Up" : "Flat";
+        const signals = [
+          { label: "Risk", detail: riskDirection, direction: signalDir },
+          { label: "Volatility", detail: volatilityDirection, direction: volatilityDirection === "Down" ? "Down" : volatilityDirection === "Up" ? "Up" : "Flat" },
+          { label: "Liquidity", detail: liquidityDirection, direction: liquidityDirection === "Down" ? "Down" : liquidityDirection === "Up" ? "Up" : "Flat" },
+        ];
+        const arrowFor = (direction: string) => (direction === "Up" ? "↑" : direction === "Down" ? "↓" : "→");
+        const colorFor = (label: string, direction: string) => {
+          if (label === "Liquidity") {
+            if (direction === "Up") return "#157347";
+            if (direction === "Down") return "#b02a37";
+            return "#475569";
+          }
+          if (direction === "Down") return "#157347";
+          if (direction === "Up") return "#b02a37";
+          return "#475569";
+        };
+
+        const colW = 240;
+        const colsSvg = signals
+          .map((signal, idx) => {
+            const x = 8 + idx * colW;
+            const color = colorFor(signal.label, signal.direction);
+            return `
+              <rect x="${x}" y="24" width="${colW - 16}" height="94" rx="10" fill="#f8fafc" stroke="#d7deea" />
+              <text x="${x + 16}" y="46" font-size="12" fill="#64748b" font-family="Segoe UI, Inter, Arial, sans-serif">${escapeHtml(signal.label)}</text>
+              <text x="${x + 16}" y="82" font-size="30" fill="${color}" font-family="Segoe UI, Inter, Arial, sans-serif">${arrowFor(signal.direction)}</text>
+              <text x="${x + 52}" y="82" font-size="14" fill="${color}" font-family="Segoe UI, Inter, Arial, sans-serif" font-weight="700">${escapeHtml(signal.detail)}</text>
+            `;
+          })
+          .join("");
+
+        return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Risk, volatility, and liquidity direction">
+          <text x="8" y="16" font-size="12" fill="#475569" font-family="Segoe UI, Inter, Arial, sans-serif">Directional panel for risk, volatility, and liquidity</text>
+          ${colsSvg}
+        </svg>`;
+      })();
+
+      const reportHtml = `<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Decision Record ${escapeHtml(decisionId)}</title>
+    <style>
+      :root {
+        --ink: #0f172a;
+        --muted: #475569;
+        --line: #d7deea;
+        --soft: #f8fafc;
+        --accent: #0b4de8;
+        --positive: #157347;
+        --negative: #b02a37;
+        --amber: #b45309;
+        --page-width: 186mm;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: "Segoe UI", Inter, Arial, sans-serif;
+        font-size: 11pt;
+        line-height: 1.35;
+        color: var(--ink);
+        background: #eef2f8;
+      }
+      .report {
+        width: min(var(--page-width), calc(100vw - 24px));
+        max-width: var(--page-width);
+        margin: 20px auto;
+        background: #fff;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 26px 30px 40px;
+      }
+      .no-print {
+        position: sticky;
+        top: 0;
+        z-index: 10;
+        background: #0b1224;
+        color: #e5e7eb;
+        padding: 10px 14px;
+        border-radius: 10px;
+        margin-bottom: 14px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+      }
+      .no-print button {
+        border: 1px solid #2e3b55;
+        background: #111b34;
+        color: #fff;
+        padding: 8px 12px;
+        border-radius: 8px;
+        cursor: pointer;
+        font-weight: 600;
+      }
+      .doc-title-block {
+        margin: 2px 0 0 0;
+      }
+      .doc-kicker {
+        margin: 0;
+        color: #1e3a8a;
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.16em;
+        font-weight: 700;
+      }
+      .title {
+        margin: 6px 0 0 0;
+        font-size: 28pt;
+        line-height: 1.08;
+        font-weight: 900;
+        letter-spacing: -0.015em;
+        color: #0b1220;
+      }
+      .title-subline {
+        margin: 8px 0 0 0;
+        font-size: 14pt;
+        line-height: 1.25;
+        color: #334155;
+        font-weight: 600;
+        max-width: 820px;
+      }
+      .subtitle {
+        margin-top: 6px;
+        color: #334155;
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+      .status-stamp {
+        margin-top: 8px;
+        display: inline-block;
+        border: 1px solid #0f172a;
+        border-radius: 10px;
+        padding: 7px 12px;
+        font-size: 12px;
+        font-weight: 800;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        background: #ecf3ff;
+        box-shadow: inset 0 0 0 1px #cbd5e1;
+      }
+      .header-divider {
+        margin-top: 10px;
+        height: 2px;
+        width: 120px;
+        border-radius: 999px;
+        background: #0b4de8;
+      }
+      .brand-header {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        border-bottom: 1px solid var(--line);
+        padding-bottom: 12px;
+        margin-bottom: 12px;
+      }
+      .brand-logo {
+        width: 42px;
+        height: 42px;
+        object-fit: contain;
+      }
+      .brand-title {
+        margin: 0;
+        font-size: 20px;
+        font-weight: 800;
+        line-height: 1.2;
+      }
+      .brand-kicker {
+        margin-top: 2px;
+        color: var(--muted);
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+      .board-cover {
+        margin-top: 12px;
+        border: 1px solid var(--line);
+        background: linear-gradient(180deg, #f7fbff, #ffffff);
+        border-radius: 12px;
+        padding: 16px;
+      }
+      .board-cover h2 {
+        margin: 0;
+        font-size: 24px;
+      }
+      .board-cover p {
+        margin: 8px 0 0 0;
+        color: var(--muted);
+        font-size: 13px;
+      }
+      .board-grid {
+        margin-top: 12px;
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 10px;
+      }
+      .board-card {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: #fff;
+        padding: 10px 12px;
+      }
+      .board-card .label {
+        color: var(--muted);
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+      .board-card .value {
+        margin-top: 4px;
+        font-size: 14px;
+        font-weight: 600;
+      }
+      .decision-inline {
+        margin-top: 10px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: #fff;
+        padding: 10px 12px;
+        font-size: 14px;
+      }
+      .instrument-strip {
+        margin-top: 12px;
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 8px;
+      }
+      .instrument-chip {
+        border: 1px solid #cbd5e1;
+        background: #eef4ff;
+        border-radius: 10px;
+        padding: 8px 10px;
+        font-size: 12px;
+      }
+      .instrument-chip strong {
+        display: block;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: #334155;
+        margin-bottom: 4px;
+      }
+      .attestation-grid {
+        margin-top: 12px;
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 8px;
+      }
+      .attestation-card {
+        border: 1px solid var(--line);
+        background: #fff;
+        border-radius: 10px;
+        padding: 10px 12px;
+      }
+      .attestation-card .label {
+        color: var(--muted);
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+      .attestation-card .value {
+        margin-top: 4px;
+        font-size: 13px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        word-break: break-all;
+      }
+      .executive-note {
+        margin-top: 10px;
+        border-left: 4px solid #0b4de8;
+        background: #f8fbff;
+        border-radius: 8px;
+        padding: 10px 12px;
+        font-size: 13px;
+        line-height: 1.45;
+      }
+      .authority-box {
+        margin-top: 12px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: #f8fbff;
+        padding: 12px;
+      }
+      .meta-grid {
+        margin-top: 12px;
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 10px;
+      }
+      .meta-card {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: var(--soft);
+        padding: 10px 12px;
+      }
+      .meta-label {
+        font-size: 11px;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+      .meta-value {
+        margin-top: 4px;
+        font-size: 15px;
+        font-weight: 600;
+      }
+      .toc {
+        margin-top: 20px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 12px;
+        background: #f9fbff;
+      }
+      .toc ul { margin: 8px 0 0 18px; }
+      .toc a { color: var(--accent); text-decoration: none; }
+      section {
+        margin-top: 22px;
+        border-top: 1px solid var(--line);
+        padding-top: 16px;
+      }
+      h2 {
+        margin: 0 0 6px 0;
+        font-size: 15pt;
+        font-weight: 700;
+        break-after: avoid-page;
+        page-break-after: avoid;
+      }
+      h3 {
+        margin: 14px 0 4px;
+        font-size: 12pt;
+        font-weight: 600;
+        break-after: avoid-page;
+        page-break-after: avoid;
+      }
+      .section-note {
+        margin: 0;
+        color: var(--muted);
+        font-size: 10.5pt;
+      }
+      .metrics {
+        margin-top: 12px;
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+        gap: 10px;
+      }
+      .metric {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 10px 12px;
+        background: #fff;
+      }
+      .metric .label { color: var(--muted); font-size: 12px; }
+      .metric .value { margin-top: 4px; font-size: 16px; font-weight: 700; }
+      .metric .value.positive { color: var(--positive); }
+      .metric .value.negative { color: var(--negative); }
+      .metric .value.warning { color: var(--amber); }
+      .verdict {
+        margin-top: 12px;
+        border: 1px solid var(--line);
+        background: #f9fbff;
+        border-radius: 10px;
+        padding: 12px;
+        font-size: 14px;
+        line-height: 1.5;
+      }
+      .callout-row {
+        margin-top: 10px;
+        display: grid;
+        gap: 8px;
+      }
+      .callout {
+        border-left: 4px solid #94a3b8;
+        background: #f8fafc;
+        border-radius: 8px;
+        padding: 8px 10px;
+        font-size: 13px;
+      }
+      .callout strong {
+        display: block;
+        margin-bottom: 2px;
+      }
+      .callout.risk { border-left-color: #0ea5e9; }
+      .callout.constraint { border-left-color: #f59e0b; }
+      .callout.gov { border-left-color: #6366f1; }
+      .visual-grid {
+        margin-top: 12px;
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+      }
+      .chart-card {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: #fff;
+        padding: 10px 12px;
+      }
+      .chart-card h3 {
+        margin: 0 0 8px 0;
+        font-size: 14px;
+      }
+      .chart-card svg {
+        width: 100%;
+        height: auto;
+        display: block;
+      }
+      .chart-span {
+        grid-column: 1 / -1;
+      }
+      .chart-caption {
+        margin-top: 8px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 12px;
+        font-size: 10pt;
+        page-break-inside: auto;
+      }
+      thead { display: table-header-group; }
+      th, td {
+        border-bottom: 1px solid var(--line);
+        padding: 7px 8px;
+        text-align: left;
+        vertical-align: top;
+        page-break-inside: avoid;
+        break-inside: avoid;
+      }
+      tr { page-break-inside: avoid; break-inside: avoid; }
+      th {
+        background: #f3f6fc;
+        position: sticky;
+        top: 0;
+      }
+      td.num, th.num {
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+      }
+      td.positive { color: var(--positive); }
+      td.negative { color: var(--negative); }
+      td.neutral { color: var(--ink); }
+      .status-pass { color: var(--positive); font-weight: 700; }
+      .status-flagged { color: var(--amber); font-weight: 700; }
+      .status-violated { color: var(--negative); font-weight: 700; }
+      ul { margin: 8px 0 0 18px; }
+      li { margin: 3px 0; }
+      .kv {
+        margin-top: 12px;
+        display: grid;
+        gap: 8px;
+      }
+      .kv-row {
+        display: grid;
+        grid-template-columns: 220px 1fr;
+        gap: 8px;
+        border-bottom: 1px dashed var(--line);
+        padding-bottom: 6px;
+      }
+      .kv-label {
+        color: var(--muted);
+        font-size: 10pt;
+      }
+      .kv-value {
+        font-size: 11pt;
+      }
+      .muted { color: var(--muted); font-size: 12px; }
+      .subtable {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+        gap: 12px;
+        margin-top: 10px;
+      }
+      .code-block {
+        margin-top: 10px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: #0b1220;
+        color: #dbe7ff;
+        padding: 10px 12px;
+        white-space: pre-wrap;
+        word-break: break-word;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 11px;
+        line-height: 1.4;
+      }
+      .appendix-wrap {
+        margin-top: 12px;
+        background: #e9edf3;
+        border: 1px solid #c4ccd8;
+        border-radius: 12px;
+        padding: 12px;
+        font-size: 12px;
+      }
+      .appendix-wrap table {
+        font-size: 11px;
+      }
+      .appendix-stamp {
+        display: inline-block;
+        border: 1px solid #94a3b8;
+        border-radius: 999px;
+        background: #f1f5f9;
+        color: #334155;
+        font-size: 11px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        padding: 4px 10px;
+      }
+      .appendix-footnote {
+        margin-top: 10px;
+        color: #475569;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+      .audit-divider {
+        text-align: left;
+        border: 2px solid #b7c5df;
+        background: linear-gradient(180deg, #dfe8f7, #eef3fb);
+        border-radius: 12px;
+        padding: 18px;
+      }
+      .appendix-divider-title {
+        margin: 0;
+        font-size: 20pt;
+        font-weight: 800;
+        letter-spacing: 0.01em;
+        color: #0f172a;
+      }
+      .appendix-divider-subtitle {
+        margin: 6px 0 0 0;
+        font-size: 12pt;
+        font-weight: 700;
+        color: #1e3a8a;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+      .appendix-divider-note {
+        margin: 8px 0 0 0;
+        font-size: 11pt;
+        color: #334155;
+      }
+      .authority-seal {
+        margin-top: 10px;
+        border: 1px solid #bfc9da;
+        border-radius: 8px;
+        background: #eef3fb;
+        padding: 8px 10px;
+        font-size: 12px;
+        font-weight: 700;
+        color: #0f172a;
+      }
+      .certification-block {
+        margin-top: 12px;
+        border: 2px solid #0f172a;
+        border-radius: 12px;
+        background: #f8fafc;
+        padding: 12px;
+      }
+      .certification-block h3 {
+        margin: 0 0 8px 0;
+        font-size: 12pt;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+      .certification-block .hash-line {
+        margin-top: 6px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 10pt;
+        word-break: break-all;
+      }
+      .impact-list {
+        margin: 10px 0 0 18px;
+        padding: 0;
+      }
+      .impact-list li {
+        margin: 6px 0;
+        font-size: 13px;
+      }
+      .keep-block {
+        margin-top: 10px;
+      }
+      .keep-block > h3 {
+        margin-top: 0;
+      }
+      .final-verdict-box {
+        margin-top: 12px;
+        border: 2px solid #0f172a;
+        border-radius: 12px;
+        background: linear-gradient(180deg, #f7fbff, #eef4ff);
+        padding: 12px;
+      }
+      .final-verdict-title {
+        margin: 0 0 8px 0;
+        font-size: 13pt;
+        font-weight: 800;
+      }
+      .final-verdict-item {
+        display: flex;
+        gap: 8px;
+        align-items: flex-start;
+        margin-top: 6px;
+        font-size: 11pt;
+      }
+      .final-verdict-icon {
+        font-size: 12pt;
+        line-height: 1;
+      }
+      @media screen and (max-width: 920px) {
+        .report {
+          width: calc(100vw - 16px);
+          max-width: none;
+          margin: 8px auto;
+          padding: 16px;
+        }
+        .board-grid,
+        .meta-grid,
+        .attestation-grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+        .instrument-strip {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+        .visual-grid {
+          grid-template-columns: 1fr;
+        }
+      }
+      .print-footer {
+        display: none;
+      }
+      .watermark {
+        display: none;
+      }
+      .page-break { break-before: page; }
+      @page { size: A4; margin: 12mm 12mm 32mm 12mm; }
+      @media print {
+        * {
+          -webkit-print-color-adjust: exact !important;
+          print-color-adjust: exact !important;
+        }
+        body { background: #fff; }
+        .report {
+          max-width: none;
+          margin: 0;
+          border: 0;
+          border-radius: 0;
+          padding: 0;
+          padding-bottom: 10mm;
+        }
+        .no-print { display: none; }
+        .page-break { break-before: page; }
+        .print-footer {
+          display: block;
+          position: fixed;
+          left: 12mm;
+          right: 12mm;
+          bottom: 0;
+          color: #64748b;
+          font-size: 9px;
+          line-height: 1.2;
+          border-top: 1px solid #cbd5e1;
+          padding: 1mm 0 0;
+          background: transparent;
+          box-sizing: border-box;
+        }
+        .print-footer span {
+          display: block;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+        .watermark {
+          display: block;
+          position: fixed;
+          top: 45%;
+          left: 8%;
+          width: 84%;
+          text-align: center;
+          font-size: 48px;
+          color: rgba(15, 23, 42, 0.06);
+          transform: rotate(-24deg);
+          pointer-events: none;
+          z-index: 0;
+          letter-spacing: 0.06em;
+        }
+        .report > *:not(.watermark):not(.print-footer) {
+          position: relative;
+          z-index: 1;
+        }
+        section {
+          break-inside: auto;
+          page-break-inside: auto;
+        }
+        #integrity .attestation-card {
+          break-inside: avoid-page;
+          page-break-inside: avoid;
+        }
+        section.keep-section .authority-box,
+        section.keep-section .certification-block {
+          break-inside: avoid-page;
+          page-break-inside: avoid;
+        }
+        #authority h2,
+        #authority .section-note,
+        #authority .authority-box h3 {
+          break-after: avoid-page;
+          page-break-after: avoid;
+        }
+        #authority .authority-box .kv {
+          display: table;
+          width: 100%;
+          border-collapse: collapse;
+          margin-top: 8px;
+        }
+        #authority .authority-box .kv-row {
+          display: table-row;
+          break-inside: avoid-page;
+          page-break-inside: avoid;
+        }
+        #authority .authority-box .kv-label,
+        #authority .authority-box .kv-value {
+          display: table-cell;
+          border-bottom: 1px dashed var(--line);
+          padding: 8px 0;
+          vertical-align: top;
+        }
+        #authority .authority-box .kv-label {
+          width: 220px;
+          padding-right: 8px;
+        }
+        #policy .kv,
+        #policy table,
+        #policy ul {
+          break-inside: avoid-page;
+          page-break-inside: avoid;
+        }
+        #explanation h2,
+        #explanation .section-note,
+        #explanation .kv {
+          break-after: avoid-page;
+          page-break-after: avoid;
+        }
+        #explanation p,
+        #explanation h3,
+        #explanation ul {
+          break-inside: avoid-page;
+          page-break-inside: avoid;
+        }
+        .keep-block {
+          break-inside: avoid-page;
+          page-break-inside: avoid;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="report">
+      <div class="watermark">Deterministic Allocation Record</div>
+      <div class="no-print">
+        <div>Decision record ready. Use print dialog and select <strong>Save as PDF</strong>.</div>
+        <button onclick="window.print()">Print / Save PDF</button>
+      </div>
+
+      <div class="brand-header">
+        <img class="brand-logo" src="${escapeHtml(brandLogoUrl)}" alt="Sagitta logo" />
+      </div>
+
+      <div class="doc-title-block">
+        <div class="doc-kicker">Sagitta Autonomous Allocation Agent</div>
+        <h1 class="title">Institutional Decision Record</h1>
+        <div class="title-subline">Deterministic Allocation Execution & Governance Brief</div>
+        <div class="status-stamp">${escapeHtml(decisionStatusStamp)}</div>
+        <div class="header-divider"></div>
+      </div>
+      <div class="subtitle">Confidential institutional decision instrument.</div>
+
+      <div class="board-cover">
+        <h2>Decision Authorization Summary</h2>
+        <div class="board-grid">
+          <div class="board-card">
+            <div class="label">Portfolio ID</div>
+            <div class="value">${escapeHtml(portfolioId)}</div>
+          </div>
+          <div class="board-card">
+            <div class="label">Policy Fingerprint</div>
+            <div class="value">${escapeHtml(policyFingerprint)}</div>
+          </div>
+          <div class="board-card">
+            <div class="label">Allocator Version</div>
+            <div class="value">${escapeHtml(`${allocatorVersion} deterministic`)}</div>
+          </div>
+          <div class="board-card">
+            <div class="label">Governance Mode</div>
+            <div class="value">${escapeHtml(decisionMode)}</div>
+          </div>
+          <div class="board-card">
+            <div class="label">Decision Timestamp (UTC)</div>
+            <div class="value">${escapeHtml(timestampUtc)}</div>
+          </div>
+          <div class="board-card">
+            <div class="label">Decision Hash / Fingerprint</div>
+            <div class="value">${escapeHtml(decisionFingerprint)}</div>
+          </div>
+        </div>
+        <div class="board-grid">
+          <div class="board-card">
+            <div class="label">Decision Purpose</div>
+            <div class="value">${escapeHtml(decisionPurpose)}</div>
+          </div>
+          <div class="board-card">
+            <div class="label">Statistical Confidence Tier</div>
+            <div class="value">${escapeHtml(confidenceProfile.tier)}</div>
+          </div>
+          <div class="board-card">
+            <div class="label">Model Conviction Level</div>
+            <div class="value">${escapeHtml(confidenceProfile.conviction)}</div>
+          </div>
+          <div class="board-card">
+            <div class="label">Decision Confidence Index</div>
+            <div class="value">${escapeHtml(confidenceProfile.index.toFixed(2))}</div>
+          </div>
+          <div class="board-card">
+            <div class="label">Material Actions</div>
+            <div class="value">${escapeHtml(
+              `${largestDecrease ? `Largest reduction: ${largestDecrease.id} (${formatSignedPercentFromWeight(largestDecrease.delta, 2)})` : "No reduction"}; ${
+                largestIncrease ? `Largest increase: ${largestIncrease.id} (${formatSignedPercentFromWeight(largestIncrease.delta, 2)})` : "No increase"
+              }`,
+            )}</div>
+          </div>
+          <div class="board-card">
+            <div class="label">Assets Exited</div>
+            <div class="value">${escapeHtml(exitedAssets.length ? exitedAssets.join(", ") : "None")}</div>
+          </div>
+        </div>
+        <div class="instrument-strip">
+          <div class="instrument-chip"><strong>Decision Disposition</strong>${escapeHtml(decisionDisposition)}</div>
+          <div class="instrument-chip"><strong>Authority of Record</strong>${escapeHtml(authorityOfRecord)}</div>
+          <div class="instrument-chip"><strong>Execution Status</strong>${escapeHtml(finalExecutionStatus)}</div>
+          <div class="instrument-chip"><strong>Override Window</strong>${escapeHtml(overrideWindow)}</div>
+        </div>
+        <div class="decision-inline"><strong>Primary Exposure:</strong> ${escapeHtml(primaryExposure)}</div>
+        <div class="decision-inline"><strong>Action Required:</strong> ${escapeHtml(`${actionRequired} (${actionType})`)}</div>
+        <div class="executive-note"><strong>Decision Ask:</strong> ${escapeHtml(boardActionStatement)}</div>
+        <div class="executive-note"><strong>Deterministic Guardrail Statement:</strong> ${escapeHtml(guardrailStatement)}</div>
+        <div class="executive-note"><strong>Why This Matters:</strong> ${escapeHtml(whyThisMatters)}</div>
+      </div>
+
+      <div class="meta-grid">
+        <div class="meta-card"><div class="meta-label">Decision ID</div><div class="meta-value">${escapeHtml(decisionId)}</div></div>
+        <div class="meta-card"><div class="meta-label">Date (UTC)</div><div class="meta-value">${escapeHtml(timestampLabel)}</div></div>
+        <div class="meta-card"><div class="meta-label">Decision Type</div><div class="meta-value">${escapeHtml(
+          decisionType === "simulation" ? "Scenario Evaluation" : turnover >= 0.15 ? "Stress-Response Rebalance" : "Routine Rebalance",
+        )}</div></div>
+        <div class="meta-card"><div class="meta-label">Portfolio Impact</div><div class="meta-value">${escapeHtml(
+          `${formatPercentFromWeight(turnover, 2)} (${turnoverClass})`,
+        )}</div></div>
+        <div class="meta-card"><div class="meta-label">Portfolio</div><div class="meta-value">${escapeHtml(portfolioContext)}</div></div>
+        <div class="meta-card"><div class="meta-label">Policy</div><div class="meta-value">${escapeHtml(policyContext)}</div></div>
+      </div>
+
+      <div class="toc">
+        <div class="meta-label">Contents</div>
+        <ul>
+          <li><a href="#summary">1. Executive Summary</a></li>
+          <li><a href="#integrity">2. Integrity & Attestation</a></li>
+          <li><a href="#visuals">3. Visual Snapshot</a></li>
+          <li><a href="#allocation">4. Allocation Outcome Summary</a></li>
+          <li><a href="#authority">5. Execution Authority</a></li>
+          <li><a href="#policy">6. Policy & Constraint Compliance</a></li>
+          <li><a href="#role-effects">7. Role Effects</a></li>
+          <li><a href="#explanation">8. Constraint Enforcement</a></li>
+          <li><a href="#warnings">9. Governance Signals & Exception Register</a></li>
+          <li><a href="#certification">10. Certification Attestation</a></li>
+          <li><a href="#appendix">Audit & Replay Appendix</a></li>
+        </ul>
+      </div>
+
+      <div class="page-break"></div>
+
+      <section id="summary">
+        <h2>1. Executive Summary</h2>
+        <p class="section-note">Section Purpose: Immutable decision summary for approval and meeting records. Generated ${escapeHtml(exportedAt)}.</p>
+        <div class="board-grid">
+          <div class="board-card">
+            <div class="label">Decision Type</div>
+            <div class="value">${escapeHtml(
+              decisionType === "simulation" ? "Scenario Evaluation" : turnover >= 0.15 ? "Stress-Response Rebalance" : "Routine Rebalance",
+            )}</div>
+          </div>
+          <div class="board-card">
+            <div class="label">Capital Affected</div>
+            <div class="value">${escapeHtml(`${formatPercentFromWeight(turnover, 2)} (${turnoverClass} turnover event)`)}</div>
+          </div>
+          <div class="board-card">
+            <div class="label">Risk Outcome</div>
+            <div class="value">${escapeHtml(riskOutcome)}</div>
+          </div>
+          <div class="board-card">
+            <div class="label">Governance Mode</div>
+            <div class="value">${escapeHtml(decisionMode)}</div>
+          </div>
+          <div class="board-card">
+            <div class="label">Action Required</div>
+            <div class="value">${escapeHtml(`${actionRequired} (${actionType})`)}</div>
+          </div>
+        </div>
+        <div class="verdict"><strong>Risk Statement:</strong> ${escapeHtml(riskStatement)}</div>
+        <div class="verdict"><strong>Decision Outcome:</strong> ${escapeHtml(outcomeStatement)}</div>
+        <h3>Strategic Impact Statement</h3>
+        <ol class="impact-list">
+          ${strategicImpactBullets.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}
+        </ol>
+        <div class="executive-note"><strong>Why This Matters:</strong> ${escapeHtml(whyThisMatters)}</div>
+        <div class="callout-row">
+          <div class="callout risk"><strong>Risk-Relevant Change</strong>${escapeHtml(maxShiftAsset && maxShiftDelta !== null ? `${maxShiftAsset} shifted ${formatPercentFromWeight(maxShiftDelta, 2)}.` : "No material single-asset shift recorded.")}</div>
+          <div class="callout constraint"><strong>Constraint Binding Event</strong>${escapeHtml(
+            constraintStatus === "None"
+              ? "No binding or violation events requiring escalation were detected."
+              : "Governance thresholds were triggered; this record is escalated for visibility with no immediate override recommendation."
+          )}</div>
+          <div class="callout gov"><strong>Governance Note</strong>${escapeHtml(governanceStatus)}</div>
+        </div>
+      </section>
+
+      <section id="integrity" class="page-break">
+        <h2>2. Integrity & Attestation</h2>
+        <p class="section-note">Section Purpose: Deterministic integrity markers and authority context for fiduciary and audit validation.</p>
+        <div class="attestation-grid">
+          <div class="attestation-card">
+            <div class="label">Record Status</div>
+            <div class="value">${escapeHtml(attestationStatus)}</div>
+          </div>
+          <div class="attestation-card">
+            <div class="label">Certification Authority</div>
+            <div class="value">${escapeHtml(attestationAuthority)}</div>
+          </div>
+          <div class="attestation-card">
+            <div class="label">Payload Hash</div>
+            <div class="value">${escapeHtml(payloadHash)}</div>
+          </div>
+          <div class="attestation-card">
+            <div class="label">Document Hash</div>
+            <div class="value">${escapeHtml(documentHash)}</div>
+          </div>
+          <div class="attestation-card">
+            <div class="label">Hash Method</div>
+            <div class="value">${escapeHtml(hashMethod)}</div>
+          </div>
+          <div class="attestation-card">
+            <div class="label">Signer Key / Signature Time (UTC)</div>
+            <div class="value">${escapeHtml(`${signingKeyId} | ${signatureTimestampUtc}`)}</div>
+          </div>
+        </div>
+      </section>
+
+      <section id="visuals">
+        <h2>3. Visual Snapshot</h2>
+        <p class="section-note">Section Purpose: PDF-safe visual evidence of allocation impact and risk direction.</p>
+        <div class="visual-grid">
+          <div class="chart-card">
+            <h3>Turnover Classification</h3>
+            ${turnoverClassificationTable}
+            <div class="chart-caption">Structured turnover classification and escalation threshold result.</div>
+          </div>
+          <div class="chart-card">
+            <h3>Pre vs Post Volatility</h3>
+            ${volatilityBarsSvg}
+            <div class="chart-caption">High-contrast pre/post portfolio volatility bars with delta in pp.</div>
+          </div>
+          <div class="chart-card">
+            <h3>Risk / Volatility / Liquidity Direction</h3>
+            ${riskSignalsSvg}
+            <div class="chart-caption">Directional signals for risk, volatility, and liquidity impact.</div>
+          </div>
+          <div class="chart-card chart-span">
+            <h3>Material Increases and Decreases</h3>
+            ${materialMoversSvg}
+            <div class="chart-caption">Top positive and negative allocation shifts relative to source.</div>
+          </div>
+          <div class="chart-card chart-span">
+            <h3>Source vs Target Concentration</h3>
+            ${concentrationSvg}
+            <div class="chart-caption">Before/after concentration profile with diversification basket aggregation.</div>
+          </div>
+        </div>
+      </section>
+
+      <section id="allocation">
+        <h2>4. Allocation Outcome Summary</h2>
+        <p class="section-note">Section Purpose: Material allocation changes only. Full allocation table preserved in the Appendix.</p>
+        <div class="subtable">
+          <div>
+            <h3>Top 3 Increases</h3>
+            <table>
+              <thead>
+                <tr>
+                  <th>Asset</th>
+                  <th class="num">Source</th>
+                  <th class="num">Target</th>
+                  <th class="num">Delta</th>
+                </tr>
+              </thead>
+              <tbody>${topIncreaseRowsHtml}</tbody>
+            </table>
+          </div>
+          <div>
+            <h3>Top 3 Decreases</h3>
+            <table>
+              <thead>
+                <tr>
+                  <th>Asset</th>
+                  <th class="num">Source</th>
+                  <th class="num">Target</th>
+                  <th class="num">Delta</th>
+                </tr>
+              </thead>
+              <tbody>${topDecreaseRowsHtml}</tbody>
+            </table>
+          </div>
+        </div>
+        <div class="callout gov" style="margin-top: 12px;">
+          <strong>Diversification Basket</strong>
+          ${escapeHtml(
+            diversificationCount > 0
+              ? `${diversificationCount} asset(s) aggregated outside top movers. Source ${formatPercentFromWeight(diversificationSource, 2)}, Target ${formatPercentFromWeight(diversificationTarget, 2)}.`
+              : "No additional assets outside material movers.",
+          )}
+        </div>
+      </section>
+
+      <section id="authority" class="keep-section">
+        <h2>5. Execution Authority</h2>
+        <p class="section-note">Section Purpose: Institutional accountability record for authorization and post-trade review.</p>
+        <div class="authority-box">
+          <h3 style="margin-top: 0;">Execution Authority</h3>
+          <div class="kv">
+            <div class="kv-row"><div class="kv-label">Allocator Mode</div><div class="kv-value">${escapeHtml(
+              decisionType === "simulation" ? "Simulation Deterministic" : "Policy-Bound Deterministic",
+            )}</div></div>
+            <div class="kv-row"><div class="kv-label">Discretion Applied</div><div class="kv-value">None</div></div>
+            <div class="kv-row"><div class="kv-label">Human Override</div><div class="kv-value">${escapeHtml(
+              humanOverrideRequired ? "Pending / Required" : "Not Invoked",
+            )}</div></div>
+            <div class="kv-row"><div class="kv-label">Escalation Trigger</div><div class="kv-value">${escapeHtml(escalationThreshold)}</div></div>
+            <div class="kv-row"><div class="kv-label">Execution Path</div><div class="kv-value">${escapeHtml(
+              decisionType === "simulation" ? "Simulation" : "Autonomous",
+            )}</div></div>
+            <div class="kv-row"><div class="kv-label">Final Execution Status</div><div class="kv-value">${escapeHtml(finalExecutionStatus)}</div></div>
+            <div class="kv-row"><div class="kv-label">Authority of Record</div><div class="kv-value">${escapeHtml(authorityOfRecord)}</div></div>
+            <div class="kv-row"><div class="kv-label">Analyzer Version</div><div class="kv-value">${escapeHtml(analyzerVersion)}</div></div>
+          </div>
+          <div class="authority-seal">No discretionary modification was applied after deterministic generation.</div>
+        </div>
+      </section>
+
+
+
+      <section id="policy">
+        <h2>6. Policy & Constraint Compliance</h2>
+        <p class="section-note">${escapeHtml(policySummary)}</p>
+        <div class="kv">
+          <div class="kv-row"><div class="kv-label">Equivalent under current state</div><div class="kv-value">${escapeHtml(equivalent ? "Yes" : "No")}</div></div>
+          <div class="kv-row"><div class="kv-label">Weight delta L1 vs baseline</div><div class="kv-value">${escapeHtml(weightDelta === null ? EM_DASH : formatPercentFromWeight(weightDelta, 2))}</div></div>
+          <div class="kv-row"><div class="kv-label">Expected return multiplier</div><div class="kv-value">${escapeHtml(erMult === null ? EM_DASH : erMult.toFixed(2))}</div></div>
+          <div class="kv-row"><div class="kv-label">Volatility multiplier</div><div class="kv-value">${escapeHtml(volMult === null ? EM_DASH : volMult.toFixed(2))}</div></div>
+          <div class="kv-row"><div class="kv-label">Risk budget multiplier</div><div class="kv-value">${escapeHtml(riskMult === null ? EM_DASH : riskMult.toFixed(2))}</div></div>
+          <div class="kv-row"><div class="kv-label">Correlation penalty</div><div class="kv-value">${escapeHtml(corrApplied === null ? EM_DASH : corrApplied ? "applied" : "none")}</div></div>
+          <div class="kv-row"><div class="kv-label">Liquidity penalty</div><div class="kv-value">${escapeHtml(liqApplied === null ? EM_DASH : liqApplied ? "applied" : "none")}</div></div>
+        </div>
+        <h3>Constraint Compliance Matrix</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>Constraint</th>
+              <th class="num">Threshold</th>
+              <th class="num">Observed</th>
+              <th class="num">Status</th>
+              <th>Evidence</th>
+            </tr>
+          </thead>
+          <tbody>${renderConstraintRows()}</tbody>
+        </table>
+        <h3>Binding factors</h3>
+        ${asList(bindingFactors, "No active binding factors recorded.")}
+        <h3>Inactive policy knobs</h3>
+        ${asList(inactiveKnobReasons, "No inactive policy knobs recorded.")}
+        <h3>Divergence conditions</h3>
+        ${asList(divergenceConditions, "No divergence conditions recorded.")}
+      </section>
+
+      <section id="role-effects">
+        <h2>7. Role Effects</h2>
+        <p class="section-note">Role policy status and dominance handling from this run.</p>
+        ${asList(roleSummary, "No role-level effects recorded.")}
+        ${rolePolicy ? `<div class="code-block">${escapeHtml(JSON.stringify(rolePolicy, null, 2))}</div>` : `<div class="muted">Role policy payload not present.</div>`}
+      </section>
+
+      <section id="explanation">
+        <h2>8. Constraint Enforcement</h2>
+        <div class="kv">
+          <div class="kv-row"><div class="kv-label">Confidence</div><div class="kv-value">${escapeHtml(explainConfidence)}</div></div>
+        </div>
+        <p>${escapeHtml(explainSummary)}</p>
+        <h3>Rationale bullets</h3>
+        ${asList(explanationRationale, "No rationale bullets provided.")}
+        <h3>Risk notes</h3>
+        ${asList(explanationRiskNotes, "No risk notes provided.")}
+      </section>
+
+      <section id="warnings">
+        <h2>9. Governance Signals & Exception Register</h2>
+        <div class="keep-block">
+          <h3>Exception Register</h3>
+          <table>
+            <thead>
+              <tr>
+                <th>Exception Code</th>
+                <th>Severity</th>
+                <th>Signal</th>
+                <th>Source</th>
+                <th>Required Action</th>
+              </tr>
+            </thead>
+            <tbody>${renderExceptionRows()}</tbody>
+          </table>
+        </div>
+        <div class="keep-block">
+          <h3>Run warnings</h3>
+          ${asList(warnings, "No warnings emitted.")}
+        </div>
+        <div class="keep-block">
+          <h3>Analysis notes</h3>
+          ${asList(analysisNotes, "No analysis notes emitted.")}
+        </div>
+        <div class="keep-block">
+          <h3>Pruned assets</h3>
+          ${asList(prunedAssets, "No assets were pruned.")}
+        </div>
+      </section>
+
+      <section id="certification">
+        <h2>10. Certification Attestation</h2>
+        <div class="certification-block">
+          <h3>Certification Attestation</h3>
+          <div class="hash-line"><strong>Decision Fingerprint (SHA256, short):</strong> ${escapeHtml(documentHash.slice(0, 16))}</div>
+          <div class="hash-line"><strong>Full Hash:</strong> ${escapeHtml(documentHash)}</div>
+          <p class="section-note" style="margin-top: 10px;">Record Scope: Complete deterministic output for the referenced Allocator version and policy fingerprint.</p>
+        </div>
+        <div class="final-verdict-box">
+          <h3 class="final-verdict-title">Final Decision Summary</h3>
+          <div class="final-verdict-item"><span class="final-verdict-icon">✅</span><span><strong>${escapeHtml(finalVerdictStatus)}</strong></span></div>
+          <div class="final-verdict-item"><span class="final-verdict-icon">🧠</span><span>${escapeHtml(finalVerdictReasoning)}</span></div>
+          <div class="final-verdict-item"><span class="final-verdict-icon">📉</span><span>Impact: ${escapeHtml(finalVerdictImpact)}</span></div>
+          <div class="final-verdict-item"><span class="final-verdict-icon">📌</span><span>Next Review: ${escapeHtml(nextReviewLine)}</span></div>
+        </div>
+      </section>
+
+      <section id="appendix" class="page-break">
+        <h2>Appendix - Audit & Deterministic Replay</h2>
+        <div class="audit-divider" style="margin-top: 10px;">
+          <div class="appendix-divider-title">Appendix</div>
+          <div class="appendix-divider-subtitle">Deterministic Audit & Replay</div>
+          <div class="appendix-divider-note">(Not Required for Allocation Approval)</div>
+        </div>
+        <p class="section-note">Supplemental Audit & Replay Section - Included for governance, regulatory, and deterministic verification.</p>
+        <div class="appendix-stamp">For Audit / Compliance / Replay Only</div>
+        <div class="appendix-wrap">
+          <h3>Appendix Summary</h3>
+          <div class="kv">
+            <div class="kv-row"><div class="kv-label">Total Assets</div><div class="kv-value">${escapeHtml(String(sortedRows.length))}</div></div>
+            <div class="kv-row"><div class="kv-label">Assets Increased</div><div class="kv-value">${escapeHtml(
+              String(sortedRows.filter((row) => typeof row.delta === "number" && row.delta > 1e-8).length),
+            )}</div></div>
+            <div class="kv-row"><div class="kv-label">Assets Reduced</div><div class="kv-value">${escapeHtml(
+              String(sortedRows.filter((row) => typeof row.delta === "number" && row.delta < -1e-8).length),
+            )}</div></div>
+            <div class="kv-row"><div class="kv-label">Max Change</div><div class="kv-value">${escapeHtml(
+              (() => {
+                const maxRow = sortedRows
+                  .filter((row) => typeof row.delta === "number" && Number.isFinite(row.delta))
+                  .sort((a, b) => Math.abs((b.delta as number) ?? 0) - Math.abs((a.delta as number) ?? 0))[0];
+                return maxRow ? `${maxRow.id} (${formatSignedPercentFromWeight(maxRow.delta, 2)})` : EM_DASH;
+              })(),
+            )}</div></div>
+            <div class="kv-row"><div class="kv-label">Turnover L1</div><div class="kv-value">${escapeHtml(
+              (() => {
+                const turnoverFromAnalysis =
+                  typeof analysis?.["turnover_l1"] === "number" ? (analysis["turnover_l1"] as number) : null;
+                return turnoverFromAnalysis === null ? formatPercentFromWeight(turnover, 2) : formatPercentFromWeight(turnoverFromAnalysis, 2);
+              })(),
+            )}</div></div>
+          </div>
+        </div>
+        <div class="appendix-wrap">
+          <h3>Full Allocation Table (All Assets)</h3>
+          <table>
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Asset</th>
+                <th class="num">Source</th>
+                <th class="num">Target</th>
+                <th class="num">Delta</th>
+              </tr>
+            </thead>
+            <tbody>${fullAllocationRowsHtml}</tbody>
+          </table>
+          <div class="appendix-footnote">Supplemental Audit & Replay Section - Included for governance, regulatory, and deterministic verification.</div>
+        </div>
+        <div class="appendix-wrap page-break">
+          <h3>Deterministic Replay Payload (Forensic Integrity Section)</h3>
+          <p class="section-note">Section Purpose: Deterministic replay verification under identical policy and constraint conditions.</p>
+          <div class="code-block">${escapeHtml(JSON.stringify(payloadForDisplay, null, 2))}</div>
+          <div class="appendix-footnote">Supplemental Audit & Replay Section - Included for governance, regulatory, and deterministic verification.</div>
+        </div>
+      </section>
+
+      <div class="print-footer">
+        <span>Sagitta AAA | Decision ID: ${escapeHtml(shortDecisionId)} | ${escapeHtml(attestationStatus)} | Confidential</span>
+      </div>
+    </div>
+    <script>
+      (function () {
+        // Intentionally no dynamic page counting; browser print pagination is non-deterministic.
+      })();
+    </script>
+  </body>
+</html>`;
+
+      const reportToken = `dr_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+      const storageKey = `decision_record_html:${reportToken}`;
+      try {
+        localStorage.setItem(storageKey, reportHtml);
+      } catch {
+        // Best-effort browser fallback cache.
+      }
+
+      try {
+        await fetch("/api/decision-record/render", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ token: reportToken, html: reportHtml }),
+        });
+      } catch {
+        // API caching is best-effort; print route also reads local storage fallback.
+      }
+
+      const printUrl = `/print/decision-record?token=${encodeURIComponent(reportToken)}`;
+      const reportWindow = window.open(printUrl, "_blank");
+      if (!reportWindow) {
+        downloadJson(`tick_${tick.tick_id || "unknown"}.json`, payload);
+        window.alert("Pop-up blocked. Downloaded JSON export instead. Allow pop-ups to open the Decision Record route.");
+      }
     },
-    [buildExportPayload, downloadJson]
+    [buildAllocationRowsFromPrior, buildExportPayload, downloadJson, extractTargetWeightsFromTick]
   );
 
   const onDeleteTickLocal = useCallback((tick: Tick) => {
@@ -3327,7 +5760,7 @@ export default function Page() {
           const id = String(a.id ?? "").trim();
           if (!id) continue;
           const cw = typeof a.current_weight === "number" && Number.isFinite(a.current_weight) ? a.current_weight : 0;
-          out[id] = cw;
+          if (!(id in out)) out[id] = cw;
         }
         return out;
       })();
@@ -3425,6 +5858,22 @@ export default function Page() {
         margin: "12px 0",
       } as React.CSSProperties,
     }),
+    []
+  );
+
+  const decisionRecordCtaStyle = useMemo(
+    () =>
+      ({
+        border: "1px solid #63D4FF",
+        background: "linear-gradient(180deg, #7FE5FF 0%, #63D4FF 100%)",
+        color: "#03121f",
+        borderRadius: 8,
+        padding: "7px 12px",
+        fontSize: 12,
+        fontWeight: 800,
+        letterSpacing: 0.2,
+        boxShadow: "0 0 0 1px rgba(0,0,0,0.18) inset",
+      }) as React.CSSProperties,
     []
   );
 
@@ -3701,7 +6150,7 @@ export default function Page() {
           <div style={{ height: 12 }} />
 
           {/* NEW: Portfolio table + inline add row */}
-          <div style={{ }}>
+          <div style={{ maxHeight: "55vh", overflowY: "auto", overflowX: "hidden", paddingRight: 2 }}>
             <table className="portfolio-table" style={{ width: "100%" }}>
               <colgroup>
                 <col style={{ width: "6%" }} />
@@ -3851,11 +6300,16 @@ export default function Page() {
                     <td>
                       <input
                         type="number"
-                        step="0.01"
+                        step="any"
                         min={0}
                         max={1}
-                        value={Number.isFinite(a.current_weight) ? a.current_weight : 0}
+                        value={formatWeightInputValue(Number.isFinite(a.current_weight) ? a.current_weight : 0)}
                         onChange={(e) => onAssetChange(idx, { current_weight: Number(e.target.value) })}
+                        title={
+                          Number.isFinite(a.current_weight)
+                            ? `Weight: ${a.current_weight.toExponential(6)} (${formatPercentFromWeight(a.current_weight, 6)})`
+                            : "Weight: 0"
+                        }
                         disabled={authorityLevel === 0}
                       />
                     </td>
@@ -3885,116 +6339,131 @@ export default function Page() {
                   </tr>
                 ))}
 
-                <tr><td colSpan={8}>&nbsp;</td></tr>
-
-                {/* Inline add row */}
-                { (authorityLevel ?? 0) > 0 && (
-                <tr>
-                  <td>
-                    <input
-                      value={newAssetDraft.id}
-                      onChange={(e) => setNewAssetDraft((s) => ({ ...s, id: e.target.value }))}
-                      placeholder="e.g. BTC"
-                    />
-                  </td>
-                  <td>
-                    <input
-                      value={newAssetDraft.name}
-                      onChange={(e) => setNewAssetDraft((s) => ({ ...s, name: e.target.value }))}
-                      placeholder="e.g. Bitcoin"
-                    />
-                  </td>
-                  <td>
-                    <select
-                      value={newAssetDraft.risk_class}
-                      onChange={(e) => {
-                        const nextRiskClass = (e.target.value as RiskClass) || "";
-                        const priors = applyPriors(nextRiskClass);
-                        setNewAssetDraft((s) => ({
-                          ...s,
-                          risk_class: nextRiskClass,
-                          expected_return: String(priors.expected_return),
-                          volatility: String(priors.volatility),
-                        }));
-                      }}
-                    >
-                      <option value="">{humanizeOption("(none)")}</option>
-                      <option value="stablecoin">{humanizeOption("stablecoin")}</option>
-                      <option value="large_cap_crypto">{humanizeOption("large_cap_crypto")}</option>
-                      <option value="defi_bluechip">{humanizeOption("defi_bluechip")}</option>
-                      <option value="large_cap_equity_core">{humanizeOption("large_cap_equity_core")}</option>
-                      <option value="defensive_equity">{humanizeOption("defensive_equity")}</option>
-                      <option value="growth_high_beta_equity">{humanizeOption("growth_high_beta_equity")}</option>
-                      <option value="high_risk">{humanizeOption("high_risk")}</option>
-                      <option value="equity_fund">{humanizeOption("equity_fund")}</option>
-                      <option value="fixed_income">{humanizeOption("fixed_income")}</option>
-                      <option value="commodities">{humanizeOption("commodities")}</option>
-                      <option value="real_estate">{humanizeOption("real_estate")}</option>
-                      <option value="cash_equivalent">{humanizeOption("cash_equivalent")}</option>
-                      <option value="speculative">{humanizeOption("speculative")}</option>
-                      <option value="traditional_asset">{humanizeOption("traditional_asset")}</option>
-                      <option value="alternative">{humanizeOption("alternative")}</option>
-                      <option value="balanced_fund">{humanizeOption("balanced_fund")}</option>
-                      <option value="emerging_market">{humanizeOption("emerging_market")}</option>
-                      <option value="frontier_market">{humanizeOption("frontier_market")}</option>
-                      <option value="esoteric">{humanizeOption("esoteric")}</option>
-                      <option value="unclassified">{humanizeOption("unclassified")}</option>
-                      <option value="wealth_management">{humanizeOption("wealth_management")}</option>
-                      <option value="fund_of_funds">{humanizeOption("fund_of_funds")}</option>
-                      <option value="index_fund">{humanizeOption("index_fund")}</option>
-                    </select>
-                  </td>
-                  <td>
-                    <select
-                      value={newAssetDraft.role}
-                      onChange={(e) => setNewAssetDraft((s) => ({ ...s, role: e.target.value as AssetRole }))}
-                    >
-                      {ROLE_OPTIONS.map((opt) => (
-                        <option key={`role_new_${opt}`} value={opt}>
-                          {humanizeOption(opt)}
-                        </option>
-                      ))}
-                    </select>
-                  </td>
-                  <td>
-                    <input
-                      type="number"
-                      step="0.01"
-                      min={0}
-                      max={1}
-                      value={newAssetDraft.current_weight}
-                      onChange={(e) => setNewAssetDraft((s) => ({ ...s, current_weight: e.target.value }))}
-                      placeholder="0.00"
-                    />
-                  </td>
-                  <td>
-                    <input
-                      type="number"
-                      step="0.01"
-                      value={newAssetDraft.expected_return}
-                      onChange={(e) => setNewAssetDraft((s) => ({ ...s, expected_return: e.target.value }))}
-                      placeholder="0.00"
-                    />
-                  </td>
-                  <td>
-                    <input
-                      type="number"
-                      step="0.01"
-                      value={newAssetDraft.volatility}
-                      onChange={(e) => setNewAssetDraft((s) => ({ ...s, volatility: e.target.value }))}
-                      placeholder="0.00"
-                    />
-                  </td>
-                  <td>
-                    <button onClick={addAssetInline} disabled={loading}>
-                      Add
-                    </button>
-                  </td>
-                </tr>
-                ) }
               </tbody>
             </table>
           </div>
+
+          {/* Inline add row (outside scroll container) */}
+          {(authorityLevel ?? 0) > 0 && (
+            <div style={{ marginTop: 10 }}>
+              <table className="portfolio-table" style={{ width: "100%" }}>
+                <colgroup>
+                  <col style={{ width: "6%" }} />
+                  <col style={{ width: "15%" }} />
+                  <col style={{ width: "15%" }} />
+                  <col style={{ width: "10%" }} />
+                  <col style={{ width: "10%" }} />
+                  <col style={{ width: "10%" }} />
+                  <col style={{ width: "9%" }} />
+                  <col style={{ width: "10%" }} />
+                </colgroup>
+                <tbody>
+                  <tr>
+                    <td>
+                      <input
+                        value={newAssetDraft.id}
+                        onChange={(e) => setNewAssetDraft((s) => ({ ...s, id: e.target.value }))}
+                        placeholder="e.g. BTC"
+                      />
+                    </td>
+                    <td>
+                      <input
+                        value={newAssetDraft.name}
+                        onChange={(e) => setNewAssetDraft((s) => ({ ...s, name: e.target.value }))}
+                        placeholder="e.g. Bitcoin"
+                      />
+                    </td>
+                    <td>
+                      <select
+                        value={newAssetDraft.risk_class}
+                        onChange={(e) => {
+                          const nextRiskClass = (e.target.value as RiskClass) || "";
+                          const priors = applyPriors(nextRiskClass);
+                          setNewAssetDraft((s) => ({
+                            ...s,
+                            risk_class: nextRiskClass,
+                            expected_return: String(priors.expected_return),
+                            volatility: String(priors.volatility),
+                          }));
+                        }}
+                      >
+                        <option value="">{humanizeOption("(none)")}</option>
+                        <option value="stablecoin">{humanizeOption("stablecoin")}</option>
+                        <option value="large_cap_crypto">{humanizeOption("large_cap_crypto")}</option>
+                        <option value="defi_bluechip">{humanizeOption("defi_bluechip")}</option>
+                        <option value="large_cap_equity_core">{humanizeOption("large_cap_equity_core")}</option>
+                        <option value="defensive_equity">{humanizeOption("defensive_equity")}</option>
+                        <option value="growth_high_beta_equity">{humanizeOption("growth_high_beta_equity")}</option>
+                        <option value="high_risk">{humanizeOption("high_risk")}</option>
+                        <option value="equity_fund">{humanizeOption("equity_fund")}</option>
+                        <option value="fixed_income">{humanizeOption("fixed_income")}</option>
+                        <option value="commodities">{humanizeOption("commodities")}</option>
+                        <option value="real_estate">{humanizeOption("real_estate")}</option>
+                        <option value="cash_equivalent">{humanizeOption("cash_equivalent")}</option>
+                        <option value="speculative">{humanizeOption("speculative")}</option>
+                        <option value="traditional_asset">{humanizeOption("traditional_asset")}</option>
+                        <option value="alternative">{humanizeOption("alternative")}</option>
+                        <option value="balanced_fund">{humanizeOption("balanced_fund")}</option>
+                        <option value="emerging_market">{humanizeOption("emerging_market")}</option>
+                        <option value="frontier_market">{humanizeOption("frontier_market")}</option>
+                        <option value="esoteric">{humanizeOption("esoteric")}</option>
+                        <option value="unclassified">{humanizeOption("unclassified")}</option>
+                        <option value="wealth_management">{humanizeOption("wealth_management")}</option>
+                        <option value="fund_of_funds">{humanizeOption("fund_of_funds")}</option>
+                        <option value="index_fund">{humanizeOption("index_fund")}</option>
+                      </select>
+                    </td>
+                    <td>
+                      <select
+                        value={newAssetDraft.role}
+                        onChange={(e) => setNewAssetDraft((s) => ({ ...s, role: e.target.value as AssetRole }))}
+                      >
+                        {ROLE_OPTIONS.map((opt) => (
+                          <option key={`role_new_${opt}`} value={opt}>
+                            {humanizeOption(opt)}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
+                    <td>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min={0}
+                        max={1}
+                        value={newAssetDraft.current_weight}
+                        onChange={(e) => setNewAssetDraft((s) => ({ ...s, current_weight: e.target.value }))}
+                        placeholder="0.00"
+                      />
+                    </td>
+                    <td>
+                      <input
+                        type="number"
+                        step="0.01"
+                        value={newAssetDraft.expected_return}
+                        onChange={(e) => setNewAssetDraft((s) => ({ ...s, expected_return: e.target.value }))}
+                        placeholder="0.00"
+                      />
+                    </td>
+                    <td>
+                      <input
+                        type="number"
+                        step="0.01"
+                        value={newAssetDraft.volatility}
+                        onChange={(e) => setNewAssetDraft((s) => ({ ...s, volatility: e.target.value }))}
+                        placeholder="0.00"
+                      />
+                    </td>
+                    <td>
+                      <button onClick={addAssetInline} disabled={loading}>
+                        Add
+                      </button>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          )}
 
           {/* ...existing code... */}
           <hr style={styles.hr} />
@@ -4861,11 +7330,9 @@ export default function Page() {
                                     return rows.map((r) => {
                                       const rc = assetRisk.get(r.id) || "unknown";
                                       const regime = (perClass as Record<string, string>)[rc] || "sideways";
-                                      const displayTgt = Math.abs(r.tgt) < 0.0001 ? 0 : r.tgt;
-                                      const displayCur =
-                                        typeof r.cur === "number" ? (Math.abs(r.cur) < 0.0001 ? 0 : r.cur) : null;
-                                      const displayDelta =
-                                        typeof r.delta === "number" ? (Math.abs(r.delta) < 0.0001 ? 0 : r.delta) : null;
+                                      const displayTgt = r.tgt;
+                                      const displayCur = typeof r.cur === "number" ? r.cur : null;
+                                      const displayDelta = typeof r.delta === "number" ? r.delta : null;
                                       const deltaPos = typeof displayDelta === "number" ? displayDelta >= 0 : true;
                                       return (
                                         <tr key={`sim_${r.id}`}>
@@ -4873,11 +7340,11 @@ export default function Page() {
                                           <td>{humanizeOption(rc)}</td>
                                           <td>{humanizeOption(regime)}</td>
                                           <td style={{ textAlign: "right" }}>
-                                            {displayCur === null ? "—" : `${(displayCur * 100).toFixed(2)}%`}
+                                            {formatPercentFromWeight(displayCur, 2)}
                                           </td>
-                                          <td style={{ textAlign: "right" }}>{(displayTgt * 100).toFixed(2)}%</td>
+                                          <td style={{ textAlign: "right" }}>{formatPercentFromWeight(displayTgt, 2)}</td>
                                           <td style={{ textAlign: "right", color: deltaPos ? "#1b7f3a" : "#b12a2a" }}>
-                                            {displayDelta === null ? "—" : `${(displayDelta * 100).toFixed(2)}%`}
+                                            {formatPercentFromWeight(displayDelta, 2)}
                                           </td>
                                         </tr>
                                       );
@@ -4918,6 +7385,45 @@ export default function Page() {
                   <div style={{ color: "#666", fontSize: 13 }}>No decision records yet. Click Execute Allocation Decision.</div>
                 ) : (
                   <div style={{ overflowX: "auto" }}>
+                    <div
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        gap: 12,
+                        flexWrap: "wrap",
+                        marginBottom: 12,
+                        padding: "10px 12px",
+                        borderRadius: 10,
+                        border: "1px solid rgba(99,212,255,0.35)",
+                        background: "rgba(99,212,255,0.08)",
+                      }}
+                    >
+                      <div>
+                        <div
+                          style={{
+                            color: "var(--sagitta-blue-muted, #7AA1C2)",
+                            fontSize: 11,
+                            letterSpacing: "0.08em",
+                            textTransform: "uppercase",
+                          }}
+                        >
+                          Primary Output
+                        </div>
+                        <div style={{ fontWeight: 700, fontSize: 15 }}>Decision Record PDF</div>
+                        <div style={{ color: "#98acc0", fontSize: 12 }}>
+                          Institutional export for allocation approval, audit, and deterministic replay.
+                        </div>
+                      </div>
+                      <button
+                        className="btn-primary"
+                        onClick={() => onExportTick(ticksForTable[0])}
+                        disabled={loading}
+                        style={{ minWidth: 280, fontWeight: 700 }}
+                      >
+                        Export Latest Decision Record
+                      </button>
+                    </div>
                     <table style={{ width: "100%", borderCollapse: "collapse" }}>
                       <thead>
                         <tr>
@@ -4935,6 +7441,24 @@ export default function Page() {
                           const tw = extractTargetWeightsFromTick(t);
                           const priorWeights = getPriorWeightsFromTick(t);
                           const { rows } = buildAllocationRowsFromPrior(priorWeights, tw);
+                          const normalizedCurrent = normalizeWeightMap(currentWeights);
+                          const priorMap = priorWeights ?? {};
+                          let maxSourceDiff = 0;
+                          let maxSourceDiffAsset = "";
+                          const diffIds = new Set<string>([
+                            ...Object.keys(normalizedCurrent),
+                            ...Object.keys(priorMap),
+                          ]);
+                          diffIds.forEach((id) => {
+                            const cur = normalizedCurrent[id] ?? 0;
+                            const prior = priorMap[id] ?? 0;
+                            const diff = Math.abs(cur - prior);
+                            if (diff > maxSourceDiff) {
+                              maxSourceDiff = diff;
+                              maxSourceDiffAsset = id;
+                            }
+                          });
+                          const showSourceMismatch = maxSourceDiffAsset && maxSourceDiff > 0.005;
                           const analysis = getAnalysisSummaryFromTick(t);
                           const churnPct =
                             analysis && typeof analysis["churn_pct"] === "number" ? (analysis["churn_pct"] as number) : null;
@@ -4977,8 +7501,13 @@ export default function Page() {
                                   )}
                                 </td>
                                 <td style={{ whiteSpace: "nowrap", textAlign: "right" }}>
-                                  <button onClick={() => onExportTick(t)} disabled={loading} style={{ marginLeft: 8 }}>
-                                    Export
+                                  <button
+                                    className="btn-primary"
+                                    onClick={() => onExportTick(t)}
+                                    disabled={loading}
+                                    style={{ marginLeft: 8, fontWeight: 700 }}
+                                  >
+                                    Decision Record PDF
                                   </button>
                                   <button onClick={() => onLoadAllocationIntoPortfolio(t)} disabled={loading  || authorityLevel === 0} style={{ marginLeft: 8 }}>
                                     Load Allocation
@@ -5023,11 +7552,16 @@ export default function Page() {
                                             {renderExplainPayload(getExplainPayloadFromTick(t))}
                                           </div>
                                         ) : null}
-                                        <div style={{ fontWeight: 600, color: "#fff", marginBottom: 2 }}>Allocation Diff (Analyzer Output)</div>
-                                        <div style={{ color: "#aaa", fontSize: 12, marginBottom: 6 }}>
-                                          Target weights relative to the source portfolio.
-                                        </div>
-                                        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                                          <div style={{ fontWeight: 600, color: "#fff", marginBottom: 2 }}>Allocation Diff (Analyzer Output)</div>
+                                          <div style={{ color: "#aaa", fontSize: 12, marginBottom: 6 }}>
+                                            Target weights relative to the source portfolio.
+                                          </div>
+                                          {showSourceMismatch ? (
+                                            <div style={{ color: "#b45f00", fontSize: 12, marginBottom: 6 }}>
+                                              Source weights reflect the portfolio snapshot used at run time. Current portfolio differs (max diff {(maxSourceDiff * 100).toFixed(2)}% in {maxSourceDiffAsset}).
+                                            </div>
+                                          ) : null}
+                                          <table style={{ width: "100%", borderCollapse: "collapse" }}>
                                           <thead>
                                             <tr>
                                               <th style={{ textAlign: "left", color: "#fff" }}>Asset</th>
@@ -5040,27 +7574,28 @@ export default function Page() {
                                           <tbody>
                                             {rows
                                               .slice()
-                                              .sort((a, b) => Math.abs(b.delta ?? 0) - Math.abs(a.delta ?? 0))
+                                              .sort(compareAllocationRowsForDisplay)
                                               .map((r) => {
                                                 const hasSource = typeof r.cur === "number";
                                                 const tgtPct = Math.max(0, Math.min(1, r.tgt));
                                                 const curPct = hasSource ? Math.max(0, Math.min(1, r.cur as number)) : null;
-                                                const displayTgt = Math.abs(tgtPct) < 0.0001 ? 0 : tgtPct;
-                                                const displayCur =
-                                                  curPct === null ? null : Math.abs(curPct) < 0.0001 ? 0 : curPct;
-                                                const displayDelta =
-                                                  typeof r.delta === "number" ? (Math.abs(r.delta) < 0.0001 ? 0 : r.delta) : null;
+                                                const displayTgt = tgtPct;
+                                                const displayCur = curPct;
+                                                const displayDelta = typeof r.delta === "number" ? r.delta : null;
+                                                const barTgt = Math.abs(displayTgt) < 0.0001 ? 0 : displayTgt;
+                                                const barCur =
+                                                  displayCur === null ? null : Math.abs(displayCur) < 0.0001 ? 0 : displayCur;
                                                 const deltaPos = typeof displayDelta === "number" ? displayDelta >= 0 : true;
 
                                                 return (
                                                   <tr key={r.id}>
                                                     <td>{r.id}</td>
                                                     <td style={{ textAlign: "right" }}>
-                                                      {displayCur === null ? "—" : `${(displayCur * 100).toFixed(2)}%`}
+                                                      {formatPercentFromWeight(displayCur, 2)}
                                                     </td>
-                                                    <td style={{ textAlign: "right" }}>{(displayTgt * 100).toFixed(2)}%</td>
+                                                    <td style={{ textAlign: "right" }}>{formatPercentFromWeight(displayTgt, 2)}</td>
                                                     <td style={{ textAlign: "right", color: deltaPos ? "#1b7f3a" : "#b12a2a" }}>
-                                                      {displayDelta === null ? "—" : `${(displayDelta * 100).toFixed(2)}%`}
+                                                      {formatPercentFromWeight(displayDelta, 2)}
                                                     </td>
                                                     <td style={{ minWidth: 260 }}>
                                                       <div
@@ -5077,17 +7612,17 @@ export default function Page() {
                                                             left: 0,
                                                             top: 0,
                                                             bottom: 0,
-                                                            width: `${displayTgt * 100}%`,
+                                                            width: `${barTgt * 100}%`,
                                                             background: "rgba(11,42,111,0.85)",
                                                             borderRadius: 6,
                                                           }}
                                                         />
-                                                        {displayCur === null ? null : (
+                                                        {barCur === null ? null : (
                                                           <div
                                                             title="source portfolio marker"
                                                             style={{
                                                               position: "absolute",
-                                                              left: `${displayCur * 100}%`,
+                                                              left: `${barCur * 100}%`,
                                                               top: -2,
                                                               width: 2,
                                                               height: 14,
@@ -5207,7 +7742,9 @@ export default function Page() {
                                   </div>
 
                                   <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 10 }}>
-                                    <button onClick={() => onExportTick(r.outputA)} disabled={loading}>Export</button>
+                                    <button className="btn-primary" onClick={() => onExportTick(r.outputA)} disabled={loading} style={{ fontWeight: 700 }}>
+                                      Decision Record PDF
+                                    </button>
                                     <button onClick={() => onToggleExplain(r.outputA)} disabled={loading}>
                                       {explainPendingA ? "Explaining..." : "Explain"}
                                     </button>
@@ -5231,18 +7768,18 @@ export default function Page() {
                                         {A.rows.map((row) => {
                                           const tgtPct = Math.max(0, Math.min(1, row.tgt));
                                           const curPct = Math.max(0, Math.min(1, row.cur));
-                                          const displayTgt = Math.abs(tgtPct) < 0.0001 ? 0 : tgtPct;
-                                          const displayCur = Math.abs(curPct) < 0.0001 ? 0 : curPct;
-                                          const displayDelta = Math.abs(row.delta) < 0.0001 ? 0 : row.delta;
+                                          const displayTgt = tgtPct;
+                                          const displayCur = curPct;
+                                          const displayDelta = row.delta;
                                           const deltaPos = displayDelta >= 0;
 
                                           return (
                                             <tr key={`A_${r.runId}_${row.id}`}>
                                               <td>{row.id}</td>
-                                              <td style={{ textAlign: "right" }}>{(displayCur * 100).toFixed(2)}%</td>
-                                              <td style={{ textAlign: "right" }}>{(displayTgt * 100).toFixed(2)}%</td>
+                                              <td style={{ textAlign: "right" }}>{formatPercentFromWeight(displayCur, 2)}</td>
+                                              <td style={{ textAlign: "right" }}>{formatPercentFromWeight(displayTgt, 2)}</td>
                                               <td style={{ textAlign: "right", color: deltaPos ? "#1b7f3a" : "#b12a2a" }}>
-                                                {(displayDelta * 100).toFixed(2)}%
+                                                {formatPercentFromWeight(displayDelta, 2)}
                                               </td>
                                               <td style={{ minWidth: 220 }}>
                                                 <div style={{ position: "relative", height: 10, background: "rgba(255,255,255,0.10)", borderRadius: 6 }}>
@@ -5273,7 +7810,9 @@ export default function Page() {
                                   </div>
 
                                   <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 10 }}>
-                                    <button onClick={() => onExportTick(r.outputB)} disabled={loading}>Export</button>
+                                    <button className="btn-primary" onClick={() => onExportTick(r.outputB)} disabled={loading} style={{ fontWeight: 700 }}>
+                                      Decision Record PDF
+                                    </button>
                                     <button onClick={() => onToggleExplain(r.outputB)} disabled={loading}>
                                       {explainPendingB ? "Explaining..." : "Explain"}
                                     </button>
@@ -5297,18 +7836,18 @@ export default function Page() {
                                         {B.rows.map((row) => {
                                           const tgtPct = Math.max(0, Math.min(1, row.tgt));
                                           const curPct = Math.max(0, Math.min(1, row.cur));
-                                          const displayTgt = Math.abs(tgtPct) < 0.0001 ? 0 : tgtPct;
-                                          const displayCur = Math.abs(curPct) < 0.0001 ? 0 : curPct;
-                                          const displayDelta = Math.abs(row.delta) < 0.0001 ? 0 : row.delta;
+                                          const displayTgt = tgtPct;
+                                          const displayCur = curPct;
+                                          const displayDelta = row.delta;
                                           const deltaPos = displayDelta >= 0;
 
                                           return (
                                             <tr key={`B_${r.runId}_${row.id}`}>
                                               <td>{row.id}</td>
-                                              <td style={{ textAlign: "right" }}>{(displayCur * 100).toFixed(2)}%</td>
-                                              <td style={{ textAlign: "right" }}>{(displayTgt * 100).toFixed(2)}%</td>
+                                              <td style={{ textAlign: "right" }}>{formatPercentFromWeight(displayCur, 2)}</td>
+                                              <td style={{ textAlign: "right" }}>{formatPercentFromWeight(displayTgt, 2)}</td>
                                               <td style={{ textAlign: "right", color: deltaPos ? "#1b7f3a" : "#b12a2a" }}>
-                                                {(displayDelta * 100).toFixed(2)}%
+                                                {formatPercentFromWeight(displayDelta, 2)}
                                               </td>
                                               <td style={{ minWidth: 220 }}>
                                                 <div style={{ position: "relative", height: 10, background: "rgba(255,255,255,0.10)", borderRadius: 6 }}>
@@ -5406,9 +7945,9 @@ export default function Page() {
                 background: "#0b0b0b",
                 border: "1px solid rgba(255,255,255,0.12)",
                 borderRadius: 12,
-                width: "min(980px, 96vw)",
+                width: "min(1180px, 98vw)",
                 maxHeight: "90vh",
-                overflowY: "auto",
+                overflowY: "hidden",
                 padding: 16,
                 boxShadow: "0 12px 40px rgba(0,0,0,0.45)",
               }}
@@ -5492,9 +8031,12 @@ export default function Page() {
                       <span>Chain</span>
                       <select
                         value={importWalletChain}
-                        onChange={(e) => setImportWalletChain(e.target.value as "ethereum" | "polygon" | "arbitrum")}
+                        onChange={(e) =>
+                          setImportWalletChain(e.target.value as "ethereum" | "polygon" | "arbitrum" | "auto")
+                        }
                         disabled={importPreviewLoading}
                       >
+                        <option value="auto">Auto (All Chains)</option>
                         <option value="ethereum">Ethereum</option>
                         <option value="polygon">Polygon</option>
                         <option value="arbitrum">Arbitrum</option>
@@ -5547,9 +8089,20 @@ export default function Page() {
                 ) : null}
 
                 {importPreviewAssets.length ? (
-                  <div style={{ border: "1px solid rgba(255,255,255,0.08)", borderRadius: 8, padding: 10 }}>
-                    <div style={{ fontWeight: 600, marginBottom: 6 }}>Preview</div>
-                    <div style={{ overflowX: "auto" }}>
+                  <div
+                    style={{
+                      border: "1px solid rgba(255,255,255,0.08)",
+                      borderRadius: 8,
+                      padding: 10,
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 8,
+                      maxHeight: "55vh",
+                      minHeight: 0,
+                    }}
+                  >
+                    <div style={{ fontWeight: 600 }}>Preview</div>
+                    <div style={{ overflowX: "auto", overflowY: "auto", flex: "1 1 auto", minHeight: 0 }}>
                       <table style={{ width: "100%", borderCollapse: "collapse" }}>
                         <thead>
                           <tr>
@@ -5557,10 +8110,18 @@ export default function Page() {
                             <th style={{ textAlign: "left", color: "#fff" }}>Name</th>
                             <th style={{ textAlign: "left", color: "#fff" }}>Risk class</th>
                             <th style={{ textAlign: "left", color: "#fff" }}>Role</th>
-                            <th style={{ textAlign: "right", color: "#fff" }}>Weight</th>
-                            <th style={{ textAlign: "right", color: "#fff" }}>ER</th>
-                            <th style={{ textAlign: "right", color: "#fff" }}>Vol</th>
-                            <th style={{ textAlign: "right", color: "#fff" }}>Source value</th>
+                            <th style={{ textAlign: "right", color: "#fff", paddingLeft: 16, paddingRight: 8, minWidth: 84 }}>
+                              Weight
+                            </th>
+                            <th style={{ textAlign: "right", color: "#fff", paddingLeft: 12, paddingRight: 8, minWidth: 56 }}>
+                              ER
+                            </th>
+                            <th style={{ textAlign: "right", color: "#fff", paddingLeft: 12, paddingRight: 8, minWidth: 56 }}>
+                              Vol
+                            </th>
+                            <th style={{ textAlign: "right", color: "#fff", paddingLeft: 16, paddingRight: 8, minWidth: 110 }}>
+                              Source value
+                            </th>
                           </tr>
                         </thead>
                         <tbody>
@@ -5569,7 +8130,21 @@ export default function Page() {
                             return (
                               <tr key={`imp_${a.id}_${idx}`}>
                                 <td>{a.id}</td>
-                                <td>{a.name}</td>
+                                <td style={{ maxWidth: 220 }}>
+                                  <span
+                                    title={a.name}
+                                    style={{
+                                      display: "inline-block",
+                                      maxWidth: 220,
+                                      overflow: "hidden",
+                                      textOverflow: "ellipsis",
+                                      whiteSpace: "nowrap",
+                                      verticalAlign: "bottom",
+                                    }}
+                                  >
+                                    {a.name}
+                                  </span>
+                                </td>
                                 <td>
                                   <select
                                     value={a.risk_class}
@@ -5594,10 +8169,18 @@ export default function Page() {
                                     ))}
                                   </select>
                                 </td>
-                                <td style={{ textAlign: "right" }}>{(a.current_weight * 100).toFixed(2)}%</td>
-                                <td style={{ textAlign: "right" }}>{a.expected_return.toFixed(2)}</td>
-                                <td style={{ textAlign: "right" }}>{a.volatility.toFixed(2)}</td>
-                                <td style={{ textAlign: "right" }}>{sourceValue === null ? "--" : sourceValue.toFixed(2)}</td>
+                                <td style={{ textAlign: "right", paddingLeft: 16, paddingRight: 8, whiteSpace: "nowrap" }}>
+                                  {(a.current_weight * 100).toFixed(2)}%
+                                </td>
+                                <td style={{ textAlign: "right", paddingLeft: 12, paddingRight: 8, whiteSpace: "nowrap" }}>
+                                  {a.expected_return.toFixed(2)}
+                                </td>
+                                <td style={{ textAlign: "right", paddingLeft: 12, paddingRight: 8, whiteSpace: "nowrap" }}>
+                                  {a.volatility.toFixed(2)}
+                                </td>
+                                <td style={{ textAlign: "right", paddingLeft: 16, paddingRight: 8, whiteSpace: "nowrap" }}>
+                                  {sourceValue === null ? "--" : sourceValue.toFixed(2)}
+                                </td>
                               </tr>
                             );
                           })}

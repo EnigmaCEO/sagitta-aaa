@@ -291,6 +291,50 @@ const FEATURES = [
   },
 ];
 
+const SECTION_LINKS = [
+  { href: "#institutions", label: "Who It Serves" },
+  { href: "#how-it-works", label: "How It Works" },
+  { href: "#pricing", label: "Pricing" },
+  { href: "#notes", label: "Research" },
+];
+
+const HERO_PROOF_POINTS = [
+  "Policy constraints are explicit, versioned, and enforced before allocation outputs are accepted.",
+  "Wallet-native import keeps portfolio state current without custody or execution permissions.",
+  "Every decision emits machine-auditable traces for review, replay, and governance defense.",
+];
+
+const WORKFLOW_STEPS = [
+  {
+    title: "Portfolio state",
+    copy: "Ingest wallet balances across supported chains and map assets into a consistent policy model.",
+    input: "Connected wallets and selected chain scope",
+    output: "Normalized holdings with role/risk-class defaults",
+    icon: "wallet" as IconName,
+  },
+  {
+    title: "Policy + regime",
+    copy: "Define policy constraints and select scenario regimes that govern how allocation is evaluated.",
+    input: "Mandate constraints, risk doctrine, and scenario definitions",
+    output: "Versioned policy/regime configuration",
+    icon: "shield" as IconName,
+  },
+  {
+    title: "Allocation + A/B comparison",
+    copy: "Run allocator versions, compare alternatives, and measure churn/sensitivity before selecting a target.",
+    input: "Portfolio state + policy/regime configuration",
+    output: "Compared allocation outputs with selected target",
+    icon: "layers" as IconName,
+  },
+  {
+    title: "Decision record",
+    copy: "Route decisions through approval controls and publish an auditable record before execution.",
+    input: "Allocator outputs and authority thresholds",
+    output: "Approved decision record ready for downstream execution",
+    icon: "file" as IconName,
+  },
+];
+
 const SANDBOX_RETURN = "/billing?plan_key=sandbox";
 const SANDBOX_LOGIN = `/auth/login?returnTo=${encodeURIComponent(SANDBOX_RETURN)}`;
 
@@ -632,26 +676,15 @@ export default function MarketingPageClient() {
 
   return (
     <>
-      <header style={{ width: "100%" }}>
-        <div className="marketing-shell" style={{ maxWidth: "90%", margin: "0 auto", padding: "18px 32px" }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%" }}>
-            <Link href="/" style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
-              <Image src="/logo.png" alt="Sagitta AAA logo" width={88} height={88} priority />
-              <span
-                style={{
-                  fontSize: 22,
-                  fontWeight: 800,
-                  whiteSpace: "nowrap",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  color: "#ededed",
-                }}
-              >
-                Sagitta Autonomous Allocation Agent
-              </span>
+      <header className="marketing-header">
+        <div className="marketing-shell marketing-header-shell">
+          <div className="marketing-header-row">
+            <Link href="/" className="marketing-brand">
+              <Image className="marketing-brand-logo" src="/logo.png" alt="Sagitta AAA logo" width={88} height={88} priority />
+              <span className="marketing-brand-text">Sagitta Autonomous Allocation Agent</span>
             </Link>
 
-            <form action="/auth/login" method="get" style={{ margin: 0 }}>
+            <form action="/auth/login" method="get" className="marketing-header-cta">
               <input type="hidden" name="returnTo" value="/app" />
               <button type="submit" className="btn-primary focus-ring">
                 Sign in
@@ -690,22 +723,25 @@ export default function MarketingPageClient() {
               </button>
             </div>
           ) : null}
-          <section className="hero-grid">
+          <section className="hero-grid" aria-labelledby="marketing-hero-title">
             <div>
               <div className="pill">Authority-Gated Decision Intelligence</div>
-              <h1 className="hero-title">Decision intelligence for crypto-native portfolio managers and DAOs</h1>
+              <h1 id="marketing-hero-title" className="hero-title">Decision intelligence for crypto-native portfolio managers and DAOs</h1>
               <p className="hero-subhead">
-                Model allocations, encode policy constraints, and generate auditable decisions across scenarios — without custody or execution.
+                Model allocations, encode policy constraints, and generate auditable decisions across scenarios without custody or execution.
               </p>
               <p className="hero-body">
-                Sagitta AAA is an authority-gated decision engine for DAOs, DeFi portfolio managers, and institutions
-                entering on-chain markets. Encode mandates as policy, import portfolios via wallets, simulate outcomes
-                across scenarios, and generate audit-ready allocation decisions.
+                Sagitta AAA gives teams a deterministic decision layer for allocation policy. Define constraints, import
+                live wallet state, run versioned allocators, and review auditable outputs before execution.
               </p>
-              <p className="hero-pain">
-                Allocator logic is versioned and policy-bound, with ascending quant scoring sophistication — ensuring
-                outcomes remain repeatable, explainable, and defensible as decision complexity increases.
-              </p>
+              <div style={{ marginTop: 18, display: "grid", gap: 8, maxWidth: 900 }}>
+                {HERO_PROOF_POINTS.map((point) => (
+                  <div key={point} className="row" style={{ alignItems: "flex-start", fontSize: 14, color: "rgba(255,255,255,0.75)" }}>
+                    <Icon name="check" size={14} stroke={1.7} className="accent-text" />
+                    <span>{point}</span>
+                  </div>
+                ))}
+              </div>
 
               <div className="highlights-grid">
                 {HERO_HIGHLIGHTS.map((item) => (
@@ -720,27 +756,58 @@ export default function MarketingPageClient() {
                 ))}
               </div>
 
-              <div className="cta-row">
+              <div className="cta-row" style={{ alignItems: "center" }}>
+                <a
+                  href="/app"
+                  className="focus-ring cta-btn"
+                  style={{
+                    color: "#0b0b0b",
+                    background: "var(--sagitta-blue, #63D4FF)",
+                    border: "1px solid rgba(var(--sagitta-blue-rgb, 99, 212, 255), 0.8)",
+                    textDecoration: "none",
+                    fontWeight: 700,
+                  }}
+                >
+                  Launch evaluation
+                </a>
                 <a href="mailto:access@sagitta.systems" className="cta-outline focus-ring cta-btn" style={{ color: "#e6edf3" }}>
                   Request access
                 </a>
                 <a href="#pricing" className="cta-outline focus-ring cta-btn" style={{ color: "#e6edf3" }}>
                   View pricing
                 </a>
-                <a href="/app" className="cta-outline focus-ring cta-btn" style={{ color: "#e6edf3" }}>
-                  Evaluate System
-                </a>
                 <audio controls preload="none" style={{ width: "200px", height: "32px", alignSelf: "center" }}>
                   <source src="/audio/intro.mp3" />
                 </audio>
               </div>
-              <div className="note-audio">
-                
+
+              <div style={{ marginTop: 18, display: "flex", flexWrap: "wrap", gap: 10 }}>
+                {SECTION_LINKS.map((item) => (
+                  <a
+                    key={item.href}
+                    href={item.href}
+                    className="focus-ring"
+                    style={{
+                      border: "1px solid rgba(255,255,255,0.14)",
+                      borderRadius: 999,
+                      padding: "6px 10px",
+                      fontSize: 12,
+                      color: "rgba(255,255,255,0.82)",
+                      textDecoration: "none",
+                      background: "rgba(255,255,255,0.02)",
+                    }}
+                  >
+                    {item.label}
+                  </a>
+                ))}
               </div>
             </div>
           </section>
 
-          <section className="section">
+          <section id="institutions" className="section">
+            <div className="section-title">Who It Serves</div>
+            <p className="section-lead">Authority-gated allocation for organizations that need policy discipline, not discretionary drift.</p>
+
             <div className="institutions-grid">
               <div className="surface panel">
                 <div style={{ fontSize: 11, letterSpacing: "0.2em", color: "rgba(255,255,255,0.5)", fontWeight: 600 }}>
@@ -824,8 +891,79 @@ export default function MarketingPageClient() {
             </div>
           </section>
 
-          <section className="section">
-            <div className="features-grid">
+          <section id="how-it-works" className="section">
+            <div className="section-title">How It Works</div>
+            <p className="section-lead">A deterministic pipeline from portfolio state to decision record.</p>
+            <p className="section-note">Each step has explicit inputs and outputs, so every decision can be reviewed and replayed.</p>
+
+            <div
+              style={{
+                marginTop: 24,
+                display: "grid",
+                gap: 14,
+                gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+              }}
+            >
+              {WORKFLOW_STEPS.map((step, idx) => (
+                <div key={step.title} className="surface panel card-hover">
+                  <div className="row-between" style={{ alignItems: "center" }}>
+                    <div
+                      style={{
+                        width: 34,
+                        height: 34,
+                        borderRadius: 10,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        border: "1px solid rgba(255,255,255,0.12)",
+                        background: "rgba(255,255,255,0.08)",
+                      }}
+                    >
+                      <Icon name={step.icon} size={16} stroke={1.5} className="accent-text" />
+                    </div>
+                    <span className="pill" style={{ fontSize: 9, padding: "3px 8px" }}>
+                      Step {idx + 1}
+                    </span>
+                  </div>
+                  <div style={{ marginTop: 12, fontSize: 15, fontWeight: 600 }}>{step.title}</div>
+                  <p style={{ marginTop: 10, fontSize: 13, color: "rgba(255,255,255,0.72)" }}>{step.copy}</p>
+                  <div
+                    style={{
+                      marginTop: 12,
+                      display: "grid",
+                      gap: 8,
+                      fontSize: 12,
+                      color: "rgba(255,255,255,0.7)",
+                    }}
+                  >
+                    <div
+                      style={{
+                        border: "1px solid rgba(255,255,255,0.1)",
+                        borderRadius: 8,
+                        padding: "8px 10px",
+                        background: "rgba(255,255,255,0.03)",
+                      }}
+                    >
+                      <span style={{ color: "rgba(255,255,255,0.55)", marginRight: 6 }}>Input:</span>
+                      <span>{step.input}</span>
+                    </div>
+                    <div
+                      style={{
+                        border: "1px solid rgba(255,255,255,0.1)",
+                        borderRadius: 8,
+                        padding: "8px 10px",
+                        background: "rgba(255,255,255,0.03)",
+                      }}
+                    >
+                      <span style={{ color: "rgba(255,255,255,0.55)", marginRight: 6 }}>Output:</span>
+                      <span>{step.output}</span>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div style={{ marginTop: 28 }} className="features-grid">
               {FEATURES.map((item) => (
                 <div key={item.title} className="surface card-hover panel">
                   <div className="row">
@@ -850,8 +988,7 @@ export default function MarketingPageClient() {
               ))}
             </div>
 
-            <div style={{ marginTop: 40 }}></div> 
-            <div className="surface-strong card-hover panel" style={{ width: "50%", margin: "auto" }}>
+            <div className="surface-strong card-hover panel" style={{ marginTop: 30 }}>
               <div className="row-between">
                 <div style={{ fontSize: 12, color: "rgba(255,255,255,0.6)" }}>Decision Authority & Controls</div>
                 <div className="accent-text" style={{ fontSize: 11 }}>
@@ -861,7 +998,7 @@ export default function MarketingPageClient() {
               <div style={{ marginTop: 16, display: "grid", gap: 14 }}>
                 {[
                   { title: "Policy engines", copy: "Mandates encoded as enforceable policy and constraints." },
-                  { title: "Scenario governance", copy: "Regime-aware decisions with audit-grade trails." },
+                  { title: "Scenario governance", copy: "Regime-aware decisions with audit-grade traces." },
                   { title: "Decision routing", copy: "Review, qualification, and approval gates before execution." },
                 ].map((item) => (
                   <div key={item.title} className="surface panel-sm" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -870,8 +1007,8 @@ export default function MarketingPageClient() {
                   </div>
                 ))}
               </div>
-              <div style={{ marginTop: 20, fontSize: 12, color: "rgba(255,255,255,0.6)" }}>
-                AAA generates decisions only. Execution and custody remain separate.
+              <div style={{ marginTop: 18, fontSize: 12, color: "rgba(255,255,255,0.6)" }}>
+                AAA outputs decisions only. Execution and custody remain separate.
               </div>
             </div>
           </section>
@@ -965,6 +1102,39 @@ export default function MarketingPageClient() {
                   </button>
                 );
               })}
+            </div>
+          </section>
+
+          <section className="section">
+            <div className="surface-strong panel" style={{ display: "grid", gap: 14 }}>
+              <div style={{ fontSize: 11, letterSpacing: "0.16em", color: "rgba(255,255,255,0.58)", textTransform: "uppercase" }}>
+                Ready to evaluate
+              </div>
+              <div style={{ fontSize: 28, fontWeight: 600, lineHeight: 1.2 }}>
+                Bring your portfolio policy into a deterministic, auditable decision loop.
+              </div>
+              <p style={{ margin: 0, fontSize: 14, color: "rgba(255,255,255,0.72)", maxWidth: 760 }}>
+                Start with observer access, validate constraints against live wallet state, and scale into governed authority modes.
+              </p>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginTop: 8 }}>
+                <Link
+                  href="/app"
+                  prefetch={false}
+                  className="focus-ring cta-btn"
+                  style={{
+                    color: "#0b0b0b",
+                    background: "var(--sagitta-blue, #63D4FF)",
+                    border: "1px solid rgba(var(--sagitta-blue-rgb, 99, 212, 255), 0.8)",
+                    textDecoration: "none",
+                    fontWeight: 700,
+                  }}
+                >
+                  Evaluate now
+                </Link>
+                <a href="#pricing" className="cta-outline focus-ring cta-btn" style={{ color: "#e6edf3", textDecoration: "none" }}>
+                  Compare plans
+                </a>
+              </div>
             </div>
           </section>
 
@@ -1106,3 +1276,4 @@ export default function MarketingPageClient() {
     </>
   );
 }
+
