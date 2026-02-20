@@ -46,6 +46,7 @@ import {
 import { useDebouncedAutosave } from "../../lib/hooks";
 import {
   type AllocatorVersion as SchemaAllocatorVersion,
+  AUTO_MANAGED_V4_MARKET_KEYS,
   REGIME_FIELDS_BY_ALLOCATOR,
   applyDefaultsPreserveExisting,
   pickOutgoingRegime,
@@ -6710,6 +6711,13 @@ export default function Page() {
               <div style={{ marginTop: 6, marginBottom: 10 }}>
                 <small style={{ color: "#666" }}>Version: {selectedAllocatorSchemaVersion}</small>
               </div>
+              {selectedAllocatorSchemaVersion === "v4" ? (
+                <div style={{ marginTop: -4, marginBottom: 10 }}>
+                  <small style={{ color: "#4f6f8f" }}>
+                    v4 market sentiment fields are auto-populated from live market APIs at run time and hidden from manual editing.
+                  </small>
+                </div>
+              ) : null}
 
               {selectedAllocatorSchemaVersion === "v1" ? (
                 <div style={{ color: "#666", fontSize: 13 }}>
@@ -6724,27 +6732,34 @@ export default function Page() {
                     alignItems: "start",
                   }}
                 >
-                  {(REGIME_FIELDS_BY_ALLOCATOR[selectedAllocatorSchemaVersion] ?? []).map((f) => {
+                  {(REGIME_FIELDS_BY_ALLOCATOR[selectedAllocatorSchemaVersion] ?? [])
+                    .filter(
+                      (f) => !(selectedAllocatorSchemaVersion === "v4" && AUTO_MANAGED_V4_MARKET_KEYS.has(f.key)),
+                    )
+                    .map((f) => {
                     const v = (regimeDraft ?? {})[f.key];
+                    const fieldDescription = f.description;
+                    const fieldDisabled = loading || authorityLevel === 0;
 
                     if (f.input === "select") {
                       const safe = sanitizeSelect(v, f.options, f.defaultValue);
                       return (
                         <label
                           key={f.key}
-                          title={f.description}
+                          title={fieldDescription}
                           style={{ display: "flex", flexDirection: "column", gap: 6 }}
                         >
                           <span
                             className="tooltip"
-                            data-tooltip={f.description || ""}
-                            aria-label={f.description || ""}
+                            data-tooltip={fieldDescription || ""}
+                            aria-label={fieldDescription || ""}
                             tabIndex={0}
                           >
                             {f.label}
                           </span>
                           <select
                             value={String(safe ?? "")}
+                            disabled={fieldDisabled}
                             onChange={(e) => {
                               const next = sanitizeSelect(e.target.value, f.options, f.defaultValue);
                               setRegimeDraft((r) => ({ ...(r ?? {}), [f.key]: next }));
@@ -6757,8 +6772,7 @@ export default function Page() {
                               </option>
                             ))}
                           </select>
-                          {/* optional: you can remove the small description if tooltip is enough */}
-                          <small style={{ color: "#666" }}>{f.description}</small>
+                          <small style={{ color: "#666" }}>{fieldDescription}</small>
                         </label>
                       );
                     }
@@ -6768,13 +6782,13 @@ export default function Page() {
                       return (
                         <label
                           key={f.key}
-                          title={f.description}
+                          title={fieldDescription}
                           style={{ display: "flex", flexDirection: "column", gap: 6 }}
                         >
                           <span
                             className="tooltip"
-                            data-tooltip={f.description || ""}
-                            aria-label={f.description || ""}
+                            data-tooltip={fieldDescription || ""}
+                            aria-label={fieldDescription || ""}
                             tabIndex={0}
                           >
                             {f.label}
@@ -6783,13 +6797,14 @@ export default function Page() {
                             type="number"
                             step={typeof f.step === "number" ? f.step : "any"}
                             value={safe}
+                            disabled={fieldDisabled}
                             onChange={(e) => {
                               const next = sanitizeNumber(e.target.value, { min: f.min, max: f.max }, Number(f.defaultValue ?? 0));
                               setRegimeDraft((r) => ({ ...(r ?? {}), [f.key]: next }));
                               setRegimeTouched(true);
                             }}
                           />
-                          <small style={{ color: "#666" }}>{f.description}</small>
+                          <small style={{ color: "#666" }}>{fieldDescription}</small>
                         </label>
                       );
                     }
@@ -6799,13 +6814,13 @@ export default function Page() {
                       return (
                         <label
                           key={f.key}
-                          title={f.description}
+                          title={fieldDescription}
                           style={{ display: "flex", flexDirection: "column", gap: 6 }}
                         >
                           <span
                             className="tooltip"
-                            data-tooltip={f.description || ""}
-                            aria-label={f.description || ""}
+                            data-tooltip={fieldDescription || ""}
+                            aria-label={fieldDescription || ""}
                             tabIndex={0}
                           >
                             {f.label}
@@ -6813,12 +6828,13 @@ export default function Page() {
                           <input
                             type="checkbox"
                             checked={checked}
+                            disabled={fieldDisabled}
                             onChange={(e) => {
                               setRegimeDraft((r) => ({ ...(r ?? {}), [f.key]: e.target.checked }));
                               setRegimeTouched(true);
                             }}
                           />
-                          <small style={{ color: "#666" }}>{f.description}</small>
+                          <small style={{ color: "#666" }}>{fieldDescription}</small>
                         </label>
                       );
                     }
@@ -6828,7 +6844,7 @@ export default function Page() {
                       return (
                         <label
                           key={f.key}
-                          title={f.description}
+                          title={fieldDescription}
                           style={{
                             display: "flex",
                             flexDirection: "column",
@@ -6838,8 +6854,8 @@ export default function Page() {
                         >
                           <span
                             className="tooltip"
-                            data-tooltip={f.description || ""}
-                            aria-label={f.description || ""}
+                            data-tooltip={fieldDescription || ""}
+                            aria-label={fieldDescription || ""}
                             tabIndex={0}
                           >
                             {f.label}
@@ -6847,6 +6863,7 @@ export default function Page() {
                           <textarea
                             rows={6}
                             value={jsonText}
+                            disabled={fieldDisabled}
                             onChange={(e) => {
                               try {
                                 const parsed = JSON.parse(e.target.value || "null");
@@ -6858,7 +6875,7 @@ export default function Page() {
                               }
                             }}
                           />
-                          <small style={{ color: "#666" }}>{f.description}</small>
+                          <small style={{ color: "#666" }}>{fieldDescription}</small>
                         </label>
                       );
                     }

@@ -22,13 +22,37 @@ export type RegimeField = {
 };
 
 // Backend-allowed keys for outgoing `regime` payload.
-// Start with known keys only (v1 keys).
+// Includes baseline + v4 market-regime fields supported by current API.
 export const BACKEND_REGIME_KEYS = new Set<string>([
 	"mission",
 	"risk_posture",
+	"market_regime",
+	"market_regime_classification",
+	"market_regime_confidence",
+	"market_signals",
+	"market_sentiment",
+	"volatility_index",
+	"risk_appetite_score",
+	"liquidity_score",
+	"breadth_score",
 	"confidence_level",
 	"correlation_state",
 	"liquidity_state",
+	"sector_sentiment",
+	"asset_sentiment",
+]);
+
+export const AUTO_MANAGED_V4_MARKET_KEYS = new Set<string>([
+	"market_regime_classification",
+	"market_regime_confidence",
+	"market_signals",
+	"market_sentiment",
+	"volatility_index",
+	"risk_appetite_score",
+	"liquidity_score",
+	"breadth_score",
+	"sector_sentiment",
+	"asset_sentiment",
 ]);
 
 export const REGIME_FIELDS_BY_ALLOCATOR: Record<AllocatorVersion, RegimeField[]> = {
@@ -204,9 +228,148 @@ export const REGIME_FIELDS_BY_ALLOCATOR: Record<AllocatorVersion, RegimeField[]>
 		// TODO(v3): add v3-only governance toggles later (LOCAL-ONLY until backend supports)
 	],
 
-	// Placeholders only; do not render yet (keep empty).
+	// v4: market-aware regime fields (backend-supported)
 	v4: [
-		// TODO(v4): Market sentiment fields (market_sentiment, sector_sentiment, asset_sentiment) [LOCAL-ONLY]
+		{
+			key: "mission",
+			label: "Mission",
+			description: "Primary objective for allocation decisions.",
+			input: "select",
+			options: ["risk_adjusted_return", "capital_preservation"],
+			defaultValue: "risk_adjusted_return",
+		},
+		{
+			key: "risk_posture",
+			label: "Risk Posture",
+			description: "High-level risk appetite for the allocator.",
+			input: "select",
+			options: ["conservative", "neutral", "aggressive"],
+			defaultValue: "neutral",
+		},
+		{
+			key: "market_regime",
+			label: "Market Regime",
+			description: "Canonical regime used by allocator overlays.",
+			input: "select",
+			options: ["risk_on", "neutral", "risk_off", "crisis"],
+			defaultValue: "neutral",
+		},
+		{
+			key: "market_regime_classification",
+			label: "Regime Classification",
+			description: "Auto-populated market regime class used for v4 market bias mapping.",
+			input: "select",
+			options: ["defensive", "neutral_transition", "risk_on", "risk_off", "crisis", "neutral"],
+			defaultValue: "neutral",
+		},
+		{
+			key: "market_regime_confidence",
+			label: "Regime Confidence",
+			description: "Auto-populated confidence in regime classification; scales sentiment impact.",
+			input: "number",
+			min: 0,
+			max: 1,
+			step: 0.01,
+			defaultValue: 0.55,
+		},
+		{
+			key: "market_sentiment",
+			label: "Market Sentiment",
+			description: "Auto-populated composite market sentiment in [-1, 1].",
+			input: "number",
+			min: -1,
+			max: 1,
+			step: 0.01,
+			defaultValue: 0,
+		},
+		{
+			key: "volatility_index",
+			label: "Volatility Index",
+			description: "Auto-populated market volatility pressure in [0, 1].",
+			input: "number",
+			min: 0,
+			max: 1,
+			step: 0.01,
+			defaultValue: 0.5,
+		},
+		{
+			key: "risk_appetite_score",
+			label: "Risk Appetite Score",
+			description: "Auto-populated market risk appetite score in [-1, 1].",
+			input: "number",
+			min: -1,
+			max: 1,
+			step: 0.01,
+			defaultValue: 0,
+		},
+		{
+			key: "liquidity_score",
+			label: "Liquidity Score",
+			description: "Auto-populated market liquidity score in [0, 1].",
+			input: "number",
+			min: 0,
+			max: 1,
+			step: 0.01,
+			defaultValue: 0.5,
+		},
+		{
+			key: "breadth_score",
+			label: "Breadth Score",
+			description: "Auto-populated market breadth score in [-1, 1].",
+			input: "number",
+			min: -1,
+			max: 1,
+			step: 0.01,
+			defaultValue: 0,
+		},
+		{
+			key: "confidence_level",
+			label: "Confidence Level",
+			description: "Legacy confidence state; retained for compatibility.",
+			input: "select",
+			options: ["low", "normal", "high"],
+			defaultValue: "normal",
+		},
+		{
+			key: "correlation_state",
+			label: "Correlation State",
+			description: "Expected cross-asset correlation environment.",
+			input: "select",
+			options: ["low", "normal", "high", "crisis"],
+			defaultValue: "normal",
+		},
+		{
+			key: "liquidity_state",
+			label: "Liquidity State",
+			description: "Liquidity state consumed directly by allocator penalties.",
+			input: "select",
+			options: ["abundant", "normal", "tight", "frozen"],
+			defaultValue: "normal",
+		},
+		{
+			key: "market_signals",
+			label: "Market Signals",
+			description: "Auto-populated signal tags (e.g., volatility_state:high, liquidity_state:contracting).",
+			input: "json",
+			defaultValue: [],
+			isAdvanced: true,
+		},
+		{
+			key: "sector_sentiment",
+			label: "Sector Sentiment Map",
+			description: "Auto-populated per-risk-class sentiment map in [-1, 1].",
+			input: "json",
+			defaultValue: {},
+			isAdvanced: true,
+		},
+		{
+			key: "asset_sentiment",
+			label: "Asset Sentiment Map",
+			description: "Auto-populated per-asset sentiment map in [-1, 1].",
+			input: "json",
+			defaultValue: {},
+			isAdvanced: true,
+		},
 	],
 	v5: [
 		// TODO(v5): Stress & drawdown governance (max_drawdown, tail_risk_mode) [LOCAL-ONLY]
@@ -236,13 +399,15 @@ export function applyDefaultsPreserveExisting(
 }
 
 export function pickOutgoingRegime(
-	_version: AllocatorVersion,
+	version: AllocatorVersion,
 	regimeDraft: Record<string, unknown> | null | undefined,
 	allowedKeys: Set<string> = BACKEND_REGIME_KEYS
 ): Record<string, unknown> {
 	const src = regimeDraft ?? {};
 	const out: Record<string, unknown> = {};
+	const autoManagedKeys = version === "v4" ? AUTO_MANAGED_V4_MARKET_KEYS : null;
 	for (const k of allowedKeys) {
+		if (autoManagedKeys?.has(k)) continue;
 		if (typeof src[k] !== "undefined") out[k] = src[k];
 	}
 
@@ -258,7 +423,12 @@ export function pickOutgoingRegime(
 // Deterministic validators per field type
 export function sanitizeSelect(v: unknown, options: string[] | undefined, fallback: unknown) {
 	if (!options || options.length === 0) return fallback;
-	return typeof v === "string" && options.includes(v) ? v : fallback;
+	if (typeof v !== "string") return fallback;
+	if (options.includes(v)) return v;
+	const norm = (s: string) => s.trim().toLowerCase().replace(/[\s-]+/g, "_");
+	const incoming = norm(v);
+	const matched = options.find((opt) => norm(opt) === incoming);
+	return matched ?? fallback;
 }
 
 export function sanitizeNumber(v: unknown, cfg: { min?: number; max?: number }, fallback: number) {
