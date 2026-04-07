@@ -203,7 +203,7 @@ export default async function ResearchNotePage({ params }: Props) {
       <hr style={{ border: "none", borderTop: "1px solid rgba(255,255,255,0.08)", margin: "40px 0" }} />
 
       <section aria-label="Related notes">
-        <div style={{ fontSize: 14, fontWeight: 600, color: "rgba(255,255,255,0.55)", marginBottom: 16, textTransform: "uppercase", letterSpacing: "0.12em", fontSize: 11 }}>
+        <div style={{ fontSize: 11, fontWeight: 600, color: "rgba(255,255,255,0.55)", marginBottom: 16, textTransform: "uppercase", letterSpacing: "0.12em" }}>
           Other research notes
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
