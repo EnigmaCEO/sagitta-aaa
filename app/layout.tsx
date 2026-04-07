@@ -7,28 +7,41 @@ const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
 const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  "title": "Sagitta Autonomous Allocation Agent",
-  "description": "Decision intelligence for autonomous allocation. Bounded, explainable, audit-ready reasoning for AI agents, DAOs, and institutional systems.",
-  "openGraph": {
-    "title": "Sagitta Autonomous Allocation Agent",
-    "description": "Decision intelligence for autonomous allocation. Bounded, explainable, audit-ready reasoning for AI agents, DAOs, and institutional systems.",
-    "url": "https://aaa.sagitta.systems",
-    "siteName": "Sagitta AAA",
-    "images": [
-      {
-        "url": "https://aaa.sagitta.systems/og-image.png"
-      }
-    ],
-    "type": "website"
+  metadataBase: new URL("https://aaa.sagitta.systems"),
+  title: {
+    default: "Sagitta AAA — Policy-Driven Allocation Intelligence",
+    template: "%s | Sagitta AAA",
   },
-  "twitter": {
-    "card": "summary_large_image",
-    "title": "Sagitta Autonomous Allocation Agent",
-    "description": "Decision intelligence for autonomous allocation. Bounded, explainable, audit-ready reasoning for AI agents, DAOs, and institutional systems.",
-    "images": [
-      "https://aaa.sagitta.systems/og-image.png"
-    ]
-  }
+  description:
+    "Sagitta AAA is a policy-driven, non-custodial allocation and risk engine for crypto-native institutions, DAOs, treasury operators, and portfolio managers.",
+  openGraph: {
+    title: "Sagitta AAA — Policy-Driven Allocation Intelligence",
+    description:
+      "Sagitta AAA is a policy-driven, non-custodial allocation and risk engine for crypto-native institutions, DAOs, treasury operators, and portfolio managers.",
+    url: "https://aaa.sagitta.systems",
+    siteName: "Sagitta AAA",
+    images: [{ url: "/og-image.png", width: 1200, height: 630, alt: "Sagitta AAA" }],
+    type: "website",
+    locale: "en_US",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Sagitta AAA — Policy-Driven Allocation Intelligence",
+    description:
+      "Sagitta AAA is a policy-driven, non-custodial allocation and risk engine for crypto-native institutions, DAOs, treasury operators, and portfolio managers.",
+    images: ["/og-image.png"],
+  },
+  robots: {
+    index: true,
+    follow: true,
+    googleBot: { index: true, follow: true },
+  },
+  verification: {
+    google: process.env.NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION ?? undefined,
+    other: process.env.NEXT_PUBLIC_BING_SITE_VERIFICATION
+      ? { "msvalidate.01": process.env.NEXT_PUBLIC_BING_SITE_VERIFICATION }
+      : undefined,
+  },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

@@ -1139,24 +1139,88 @@ export default function MarketingPageClient() {
           </section>
 
           <footer className="footer">
-            <div className="footer-row">
-              <div>(c) {new Date().getFullYear()} Sagitta Labs</div>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
-                <a href="/terms" className="focus-ring" style={{ textDecoration: "none" }}>
-                  Terms of Service
-                </a>
-                <span aria-hidden="true">|</span>
-                <a href="/privacy" className="focus-ring" style={{ textDecoration: "none" }}>
-                  Privacy Policy
-                </a>
-                <span aria-hidden="true">|</span>
-                <a
-                  href="/support"
-                  className="focus-ring"
-                  style={{ textDecoration: "none" }}
-                >
-                  Support
-                </a>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+                gap: 28,
+                marginBottom: 32,
+              }}
+            >
+              {[
+                {
+                  heading: "Product",
+                  links: [
+                    { href: "/what-is-aaa", label: "What Is AAA" },
+                    { href: "/methodology", label: "Methodology" },
+                    { href: "/decision-records", label: "Decision Records" },
+                    { href: "/security", label: "Security" },
+                    { href: "/pricing", label: "Pricing" },
+                    { href: "/changelog", label: "Changelog" },
+                  ],
+                },
+                {
+                  heading: "Use Cases",
+                  links: [
+                    { href: "/for-daos", label: "For DAOs" },
+                    { href: "/for-portfolio-managers", label: "For Portfolio Managers" },
+                    { href: "/for-treasury-operators", label: "For Treasury Operators" },
+                    { href: "/compare/aaa-vs-manual-allocation", label: "vs Manual Allocation" },
+                    { href: "/compare/aaa-vs-signal-tools", label: "vs Signal Tools" },
+                  ],
+                },
+                {
+                  heading: "Learn",
+                  links: [
+                    { href: "/docs", label: "Documentation" },
+                    { href: "/faq", label: "FAQ" },
+                    { href: "/research-notes", label: "Research Notes" },
+                  ],
+                },
+                {
+                  heading: "Company",
+                  links: [
+                    { href: "/support", label: "Support" },
+                    { href: "/privacy", label: "Privacy Policy" },
+                    { href: "/terms", label: "Terms of Service" },
+                  ],
+                },
+              ].map((col) => (
+                <div key={col.heading}>
+                  <div
+                    style={{
+                      fontSize: 11,
+                      letterSpacing: "0.14em",
+                      textTransform: "uppercase",
+                      color: "rgba(255,255,255,0.38)",
+                      marginBottom: 12,
+                      fontWeight: 600,
+                    }}
+                  >
+                    {col.heading}
+                  </div>
+                  <nav aria-label={col.heading}>
+                    <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: 8 }}>
+                      {col.links.map((link) => (
+                        <li key={link.href}>
+                          <a
+                            href={link.href}
+                            className="focus-ring"
+                            style={{ textDecoration: "none", color: "rgba(255,255,255,0.55)", fontSize: 13 }}
+                          >
+                            {link.label}
+                          </a>
+                        </li>
+                      ))}
+                    </ul>
+                  </nav>
+                </div>
+              ))}
+            </div>
+            <div className="footer-row" style={{ borderTop: "1px solid rgba(255,255,255,0.07)", paddingTop: 20 }}>
+              <div>&copy; {new Date().getFullYear()} Sagitta Labs</div>
+              <div style={{ fontSize: 12, color: "rgba(255,255,255,0.38)" }}>
+                Non-custodial &middot; Policy-driven &middot; Audit-ready
               </div>
             </div>
           </footer>
