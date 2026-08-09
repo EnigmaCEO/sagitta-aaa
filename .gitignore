@@ -39,3 +39,11 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Force-include app routes that a global/core.excludesFile may swallow.
+# A machine-level excludesFile containing a Unity-style `Logs/` rule matches
+# `app/auth/logs/` (ignore matching is case-insensitive on Windows), which
+# silently kept this route out of every commit and every deploy.
+# The directory must be re-included before its contents can be.
+!app/auth/logs/
+!app/auth/logs/**

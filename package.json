@@ -8,7 +8,9 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test:imports": "node --loader tsx --test testing/imports.test.ts"
+    "test:imports": "node --loader tsx --test testing/imports.test.ts",
+    "test:surface": "node --import tsx --test testing/productionSurface.test.ts",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@auth0/nextjs-auth0": "^4.14.0",

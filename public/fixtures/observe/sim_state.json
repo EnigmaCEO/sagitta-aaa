@@ -1,0 +1,142 @@
+{
+    "sim_state": {
+        "initial_cash": 100000.0,
+        "current_year": 2,
+        "max_years": 10,
+        "baseline_weights": {
+            "SPC": 0.8,
+            "USDC": 0.05,
+            "SKY": 0.03,
+            "GFI": 0.02,
+            "DOT": 0.05,
+            "SYRUP": 0.05
+        },
+        "baseline_value": 111314.32,
+        "aaa_value": 112137.53,
+        "seed": 42,
+        "timeline": [
+            {
+                "year": 1,
+                "year_index": 0,
+                "baseline_value": 100000.0,
+                "aaa_value": 100000.0,
+                "baseline_year_return": 0.06627,
+                "aaa_year_return": 0.06928,
+                "baseline_end_value": 106627.0,
+                "aaa_end_value": 106928.0,
+                "aaa_vs_baseline_delta_usd": 301.0,
+                "allocator_decision": {
+                    "next_allocation_weights": {
+                        "SPC": 0.7,
+                        "USDC": 0.07,
+                        "SKY": 0.04,
+                        "GFI": 0.04,
+                        "DOT": 0.05,
+                        "SYRUP": 0.1
+                    }
+                },
+                "risk_posture_used": "balanced",
+                "sector_sentiment_used": {
+                    "defi_bluechip": "neutral",
+                    "large_cap_crypto": "positive",
+                    "stablecoin": "neutral",
+                    "wealth_management": "positive",
+                    "fund_of_funds": "neutral"
+                },
+                "realized_returns_by_asset": {
+                    "SPC": 0.062,
+                    "USDC": 0.041,
+                    "SKY": 0.185,
+                    "GFI": -0.074,
+                    "DOT": 0.118,
+                    "SYRUP": 0.093
+                },
+                "aaa_weights_used": {
+                    "SPC": 0.72,
+                    "USDC": 0.08,
+                    "SKY": 0.05,
+                    "GFI": 0.02,
+                    "DOT": 0.06,
+                    "SYRUP": 0.07
+                }
+            },
+            {
+                "year": 2,
+                "year_index": 1,
+                "baseline_value": 106627.0,
+                "aaa_value": 106928.0,
+                "baseline_year_return": 0.04396,
+                "aaa_year_return": 0.04872,
+                "baseline_end_value": 111314.32,
+                "aaa_end_value": 112137.53,
+                "aaa_vs_baseline_delta_usd": 823.21,
+                "allocator_decision": {
+                    "next_allocation_weights": {
+                        "SPC": 0.7,
+                        "USDC": 0.07,
+                        "SKY": 0.04,
+                        "GFI": 0.04,
+                        "DOT": 0.05,
+                        "SYRUP": 0.1
+                    }
+                },
+                "risk_posture_used": "defensive",
+                "sector_sentiment_used": {
+                    "defi_bluechip": "neutral",
+                    "large_cap_crypto": "positive",
+                    "stablecoin": "neutral",
+                    "wealth_management": "positive",
+                    "fund_of_funds": "neutral"
+                },
+                "realized_returns_by_asset": {
+                    "SPC": 0.048,
+                    "USDC": 0.043,
+                    "SKY": -0.112,
+                    "GFI": 0.156,
+                    "DOT": -0.061,
+                    "SYRUP": 0.134
+                },
+                "aaa_weights_used": {
+                    "SPC": 0.7,
+                    "USDC": 0.07,
+                    "SKY": 0.04,
+                    "GFI": 0.04,
+                    "DOT": 0.05,
+                    "SYRUP": 0.1
+                }
+            }
+        ],
+        "summary": {
+            "years_elapsed": 2,
+            "baseline_start_value": 100000.0,
+            "baseline_end_value": 111314.32,
+            "aaa_start_value": 100000.0,
+            "aaa_end_value": 112137.53,
+            "baseline_total_return": 0.113143,
+            "aaa_total_return": 0.121375,
+            "aaa_vs_baseline_delta_usd": 823.21,
+            "aaa_vs_baseline_delta_pct": 0.007395
+        },
+        "min_annual_return": -0.9,
+        "max_annual_return": 2.0,
+        "shock_cap_for_vol_update": 1.0,
+        "vol_min": 0.01,
+        "vol_max": 2.0,
+        "er_min": -0.95,
+        "er_max": 2.0,
+        "belief_alpha": 0.15,
+        "belief_beta": 0.2,
+        "regime_vol_multiplier": 1.0,
+        "sim_weight_floor": 0.01,
+        "aaa_weights": {
+            "SPC": 0.7,
+            "USDC": 0.07,
+            "SKY": 0.04,
+            "GFI": 0.04,
+            "DOT": 0.05,
+            "SYRUP": 0.1
+        },
+        "needs_reset": false
+    },
+    "needs_reset": false
+}
