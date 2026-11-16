@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import Image from "next/image";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { getNoteBySlug, notes as NOTE_REGISTRY } from "../lib/content/notes";
 
@@ -540,18 +540,113 @@ const renderMarkdownBlocks = (blocks: MarkdownBlock[]) =>
     );
   });
 
-export default function MarketingPageClient() {
-  const [activeInstitutionId, setActiveInstitutionId] = useState(INSTITUTIONS[0].id);
-  const activeInstitution =
-    INSTITUTIONS.find((item) => item.id === activeInstitutionId) ?? INSTITUTIONS[0];
+/** Opens and closes research notes through the ?note= query parameter. */
+function useNoteNavigation() {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
-
   const noteSlug = searchParams.get("note");
+
+  const navigate = useCallback(
+    (target: string) => {
+      const currentQuery = searchParams.toString();
+      const current = currentQuery ? `${pathname}?${currentQuery}` : pathname;
+      if (target === current) {
+        return;
+      }
+      try {
+        const result = router.push(target, { scroll: false });
+        Promise.resolve(result).catch(() => undefined);
+      } catch (err) {
+        console.warn("Navigation error:", err);
+      }
+    },
+    [searchParams, pathname, router],
+  );
+
+  const openNote = useCallback(
+    (slug: string) => {
+      if (!slug || slug === noteSlug) {
+        return;
+      }
+      const params = new URLSearchParams(searchParams.toString());
+      params.set("note", slug);
+      navigate(`${pathname}?${params.toString()}`);
+    },
+    [searchParams, pathname, navigate, noteSlug],
+  );
+
+  const closeNote = useCallback(() => {
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete("note");
+    const query = params.toString();
+    navigate(query ? `${pathname}?${query}` : pathname);
+  }, [searchParams, pathname, navigate]);
+
+  return { noteSlug, openNote, closeNote };
+}
+
+function NoteCards({ activeSlug, onOpen }: { activeSlug: string | null; onOpen: (slug: string) => void }) {
+  return (
+    <div style={{ marginTop: 24, display: "grid", gap: 16 }}>
+      {NOTE_REGISTRY.map((noteItem) => {
+        const isActive = noteItem.slug === activeSlug;
+        const summary = NOTE_SUMMARIES[noteItem.slug];
+        return (
+          <button
+            key={noteItem.title}
+            type="button"
+            onClick={() => onOpen(noteItem.slug)}
+            className="surface panel hover-card focus-ring note-card"
+            style={{
+              textDecoration: "none",
+              display: "block",
+              borderRadius: 12,
+              textAlign: "left",
+              background: isActive ? "rgba(var(--sagitta-blue-strong-rgb, 159, 219, 255), 0.12)" : undefined,
+              borderColor: isActive ? "rgba(var(--sagitta-blue-strong-rgb, 159, 219, 255), 0.4)" : undefined,
+            }}
+          >
+            <div style={{ fontSize: 11, letterSpacing: "0.1em", textTransform: "uppercase", color: "rgba(255,255,255,0.45)", marginBottom: 6 }}>{noteItem.subtitle}</div>
+            <div style={{ fontSize: 16, fontWeight: 600, color: "#e6edf3", paddingBottom: "8px" }}>{noteItem.title}</div>
+            {summary && (
+              <p style={{ fontSize: 13, color: "rgba(255,255,255,0.62)", lineHeight: 1.55, margin: "0 0 10px" }}>{summary}</p>
+            )}
+            <div style={{ fontSize: 13, color: "rgba(255,255,255,0.7)", display: "flex", alignItems: "center", gap: 8 }}>
+              <span>Read note &rarr;</span>
+              {noteItem.audioUrl ? (
+                <span
+                  style={{
+                    fontSize: 11,
+                    color: "var(--sagitta-blue-muted, #7AA1C2)",
+                    border: "1px solid rgba(var(--sagitta-blue-muted-rgb, 122, 161, 194), 0.35)",
+                    padding: "2px 8px",
+                    borderRadius: 999,
+                  }}
+                >
+                  Audio available
+                </span>
+              ) : null}
+            </div>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/** The note cards, aware of which note is open. Reads the query string, so it renders in the browser. */
+function LiveNoteCards() {
+  const { noteSlug, openNote } = useNoteNavigation();
+  return <NoteCards activeSlug={noteSlug} onOpen={openNote} />;
+}
+
+const ignoreOpen = () => undefined;
+
+function NoteDrawer() {
+  const { noteSlug, closeNote } = useNoteNavigation();
   const activeNote = useMemo(() => getNoteBySlug(noteSlug), [noteSlug]);
   const noteOpen = Boolean(noteSlug);
-  const [dismissedNotice, setDismissedNotice] = useState<string | null>(null);
 
   const noteFallback =
     noteSlug && !activeNote
@@ -570,6 +665,168 @@ export default function MarketingPageClient() {
     }
     trackEvent("note_opened", { slug: noteSlug });
   }, [noteSlug]);
+
+  useEffect(() => {
+    if (!tocOpen) {
+      return;
+    }
+    const id = window.setTimeout(() => setTocOpen(false), 0);
+    return () => clearTimeout(id);
+  }, [noteSlug, tocOpen]);
+
+  const handleCopyLink = useCallback(() => {
+    if (!noteSlug || typeof window === "undefined") {
+      return;
+    }
+    const url = new URL(window.location.href);
+    url.searchParams.set("note", noteSlug);
+    const link = url.toString();
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(link).catch(() => undefined);
+    }
+    trackEvent("note_copied", { slug: noteSlug });
+  }, [noteSlug]);
+
+  useEffect(() => {
+    if (!noteOpen) {
+      return;
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        closeNote();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [noteOpen, closeNote]);
+
+  if (!noteOpen) {
+    return null;
+  }
+
+  return (
+      <div className="note-drawer-overlay" role="presentation" onClick={closeNote}>
+        <div
+          className="note-drawer"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Research note"
+          onClick={(event) => event.stopPropagation()}
+        >
+          <div className="note-drawer-inner">
+            <div className="note-drawer-header">
+              <div>
+                <div className="note-title" id="note-title">
+                  {note?.title}
+                </div>
+                <div className="note-subtitle">{note?.subtitle}</div>
+                <div className="note-meta">
+                  <span>{note?.date || "--"}</span>
+                  <span className="note-meta-divider">|</span>
+                  <span>{readingTime ? `${readingTime} min read` : "--"}</span>
+                </div>
+              </div>
+              <div className="note-header-actions">
+                <button type="button" className="note-button focus-ring" style={{ textWrapMode: "nowrap" }} onClick={handleCopyLink}>
+                  Copy link
+                </button>
+                <button type="button" className="note-button focus-ring" onClick={closeNote} aria-label="Close note">
+                  Close
+                </button>
+              </div>
+            </div>
+
+            {note?.audioUrl ? (
+              <div className="note-audio">
+                <audio controls preload="none">
+                  <source src={note.audioUrl} />
+                </audio>
+              </div>
+            ) : null}
+
+            {headings.length > 0 ? (
+              <div className="note-toc-mobile">
+                <button
+                  type="button"
+                  className="note-button focus-ring"
+                  aria-expanded={tocOpen}
+                  onClick={() => setTocOpen((prev) => !prev)}
+                >
+                  Contents
+                </button>
+                {tocOpen ? (
+                  <div className="note-toc-list">
+                    {headings.map((heading) => (
+                      <button
+                        key={heading.id}
+                        type="button"
+                        className={`note-toc-link level-${heading.level}`}
+                        onClick={() => {
+                          const el = document.getElementById(heading.id);
+                          if (el) {
+                            el.scrollIntoView({ behavior: "smooth", block: "start" });
+                          }
+                        }}
+                      >
+                        {heading.text}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
+            <div className="note-drawer-body">
+              {headings.length > 0 ? (
+                <aside className="note-toc">
+                  <div className="note-toc-title">Contents</div>
+                  <div className="note-toc-list">
+                    {headings.map((heading) => (
+                      <button
+                        key={heading.id}
+                        type="button"
+                        className={`note-toc-link level-${heading.level}`}
+                        onClick={() => {
+                          const el = document.getElementById(heading.id);
+                          if (el) {
+                            el.scrollIntoView({ behavior: "smooth", block: "start" });
+                          }
+                        }}
+                      >
+                        {heading.text}
+                      </button>
+                    ))}
+                  </div>
+                </aside>
+              ) : null}
+
+              <div className="note-content">
+                {note && note === noteFallback ? (
+                  <div className="note-empty">Note not found.</div>
+                ) : blocks.length > 0 ? (
+                  renderMarkdownBlocks(blocks)
+                ) : (
+                  <div className="note-empty">Content pending.</div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+  );
+}
+
+/** Confirms an email verification, then cleans the auth parameters out of the URL. */
+function VerificationNotice() {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const [dismissedNotice, setDismissedNotice] = useState<string | null>(null);
 
   const verificationNotice = useMemo(() => {
     const params = new URLSearchParams(searchParams.toString());
@@ -607,87 +864,43 @@ export default function MarketingPageClient() {
       router.replace(target, { scroll: false });
     }
   }, [searchParams, pathname, router]);
+  if (!verificationNotice || verificationNotice.message === dismissedNotice) {
+    return null;
+  }
 
-  useEffect(() => {
-    if (!tocOpen) {
-      return;
-    }
-    const id = window.setTimeout(() => setTocOpen(false), 0);
-    return () => clearTimeout(id);
-  }, [noteSlug, tocOpen]);
-
-  const closeNote = useCallback(() => {
-    const params = new URLSearchParams(searchParams.toString());
-    params.delete("note");
-    const query = params.toString();
-    const target = query ? `${pathname}?${query}` : pathname;
-    const currentQuery = searchParams.toString();
-    const current = currentQuery ? `${pathname}?${currentQuery}` : pathname;
-    if (target === current) {
-      return;
-    }
-    try {
-      const result = router.push(target, { scroll: false });
-      Promise.resolve(result).catch(() => undefined);
-    } catch (err) {
-      console.warn("Navigation error:", err);
-    }
-  }, [searchParams, pathname, router]);
-
-  const openNote = useCallback(
-    (slug: string) => {
-      if (!slug || slug === noteSlug) {
-        return;
-      }
-      const params = new URLSearchParams(searchParams.toString());
-      params.set("note", slug);
-      const query = params.toString();
-      const target = `${pathname}?${query}`;
-      const currentQuery = searchParams.toString();
-      const current = currentQuery ? `${pathname}?${currentQuery}` : pathname;
-      if (target === current) {
-        return;
-      }
-      try {
-        const result = router.push(target, { scroll: false });
-        Promise.resolve(result).catch(() => undefined);
-      } catch (err) {
-        console.warn("Navigation error:", err);
-      }
-    },
-    [searchParams, pathname, router, noteSlug],
+  return (
+    <div
+      className="surface"
+      style={{
+        margin: "16px 0 28px",
+        padding: "12px 16px",
+        borderRadius: 12,
+        border: "1px solid rgba(255,255,255,0.12)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: 16,
+        background: "rgba(255,255,255,0.04)",
+      }}
+    >
+      <div style={{ fontSize: 13, color: "rgba(255,255,255,0.8)" }}>
+        {verificationNotice.message}
+      </div>
+      <button
+        type="button"
+        className="note-button focus-ring"
+        onClick={() => setDismissedNotice(verificationNotice.message)}
+      >
+        Dismiss
+      </button>
+    </div>
   );
+}
 
-  const handleCopyLink = useCallback(() => {
-    if (!noteSlug || typeof window === "undefined") {
-      return;
-    }
-    const url = new URL(window.location.href);
-    url.searchParams.set("note", noteSlug);
-    const link = url.toString();
-    if (navigator.clipboard?.writeText) {
-      navigator.clipboard.writeText(link).catch(() => undefined);
-    }
-    trackEvent("note_copied", { slug: noteSlug });
-  }, [noteSlug]);
-
-  useEffect(() => {
-    if (!noteOpen) {
-      return;
-    }
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        closeNote();
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => {
-      window.removeEventListener("keydown", onKeyDown);
-      document.body.style.overflow = previousOverflow;
-    };
-  }, [noteOpen, closeNote]);
+export default function MarketingPageClient() {
+  const [activeInstitutionId, setActiveInstitutionId] = useState(INSTITUTIONS[0].id);
+  const activeInstitution =
+    INSTITUTIONS.find((item) => item.id === activeInstitutionId) ?? INSTITUTIONS[0];
 
   return (
     <>
@@ -711,33 +924,9 @@ export default function MarketingPageClient() {
 
       <main className="marketing-page">
         <div className="marketing-shell container">
-          {verificationNotice && verificationNotice.message !== dismissedNotice ? (
-            <div
-              className="surface"
-              style={{
-                margin: "16px 0 28px",
-                padding: "12px 16px",
-                borderRadius: 12,
-                border: "1px solid rgba(255,255,255,0.12)",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                gap: 16,
-                background: "rgba(255,255,255,0.04)",
-              }}
-            >
-              <div style={{ fontSize: 13, color: "rgba(255,255,255,0.8)" }}>
-                {verificationNotice.message}
-              </div>
-              <button
-                type="button"
-                className="note-button focus-ring"
-                onClick={() => setDismissedNotice(verificationNotice.message)}
-              >
-                Dismiss
-              </button>
-            </div>
-          ) : null}
+          <Suspense fallback={null}>
+            <VerificationNotice />
+          </Suspense>
           <section className="hero-grid" aria-labelledby="marketing-hero-title">
             <div>
               <div className="pill">AI crypto allocation agent for DAOs, treasury teams, and portfolio managers</div>
@@ -1077,50 +1266,10 @@ export default function MarketingPageClient() {
             <div className="section-title">Research, methodology, and decision design notes</div>
             <p className="section-lead">The intellectual framework behind Sagitta AAA — why determinism matters, how authority structures work, and what makes allocation policy enforceable.</p>
             <p className="section-note">These are working notes on the product&apos;s design philosophy. Each note addresses a real question about governance, trust, and institutional capital allocation.</p>
-            <div style={{ marginTop: 24, display: "grid", gap: 16 }}>
-              {NOTE_REGISTRY.map((noteItem) => {
-                const isActive = noteItem.slug === noteSlug;
-                const summary = NOTE_SUMMARIES[noteItem.slug];
-                return (
-                  <button
-                    key={noteItem.title}
-                    type="button"
-                    onClick={() => openNote(noteItem.slug)}
-                    className="surface panel hover-card focus-ring note-card"
-                    style={{
-                      textDecoration: "none",
-                      display: "block",
-                      borderRadius: 12,
-                      textAlign: "left",
-                      background: isActive ? "rgba(var(--sagitta-blue-strong-rgb, 159, 219, 255), 0.12)" : undefined,
-                      borderColor: isActive ? "rgba(var(--sagitta-blue-strong-rgb, 159, 219, 255), 0.4)" : undefined,
-                    }}
-                  >
-                    <div style={{ fontSize: 11, letterSpacing: "0.1em", textTransform: "uppercase", color: "rgba(255,255,255,0.45)", marginBottom: 6 }}>{noteItem.subtitle}</div>
-                    <div style={{ fontSize: 16, fontWeight: 600, color: "#e6edf3", paddingBottom: "8px" }}>{noteItem.title}</div>
-                    {summary && (
-                      <p style={{ fontSize: 13, color: "rgba(255,255,255,0.62)", lineHeight: 1.55, margin: "0 0 10px" }}>{summary}</p>
-                    )}
-                    <div style={{ fontSize: 13, color: "rgba(255,255,255,0.7)", display: "flex", alignItems: "center", gap: 8 }}>
-                      <span>Read note &rarr;</span>
-                      {noteItem.audioUrl ? (
-                        <span
-                          style={{
-                            fontSize: 11,
-                            color: "var(--sagitta-blue-muted, #7AA1C2)",
-                            border: "1px solid rgba(var(--sagitta-blue-muted-rgb, 122, 161, 194), 0.35)",
-                            padding: "2px 8px",
-                            borderRadius: 999,
-                          }}
-                        >
-                          Audio available
-                        </span>
-                      ) : null}
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
+            {/* Rendered on the server without an active note, so crawlers read every card. */}
+            <Suspense fallback={<NoteCards activeSlug={null} onOpen={ignoreOpen} />}>
+              <LiveNoteCards />
+            </Suspense>
             <div style={{ marginTop: 20 }}>
               <a
                 href="/research-notes"
@@ -1253,116 +1402,9 @@ export default function MarketingPageClient() {
         </div>
       </main>
 
-      {noteOpen ? (
-        <div className="note-drawer-overlay" role="presentation" onClick={closeNote}>
-          <div
-            className="note-drawer"
-            role="dialog"
-            aria-modal="true"
-            aria-label="Research note"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="note-drawer-inner">
-              <div className="note-drawer-header">
-                <div>
-                  <div className="note-title" id="note-title">
-                    {note?.title}
-                  </div>
-                  <div className="note-subtitle">{note?.subtitle}</div>
-                  <div className="note-meta">
-                    <span>{note?.date || "--"}</span>
-                    <span className="note-meta-divider">|</span>
-                    <span>{readingTime ? `${readingTime} min read` : "--"}</span>
-                  </div>
-                </div>
-                <div className="note-header-actions">
-                  <button type="button" className="note-button focus-ring" style={{ textWrapMode: "nowrap" }} onClick={handleCopyLink}>
-                    Copy link
-                  </button>
-                  <button type="button" className="note-button focus-ring" onClick={closeNote} aria-label="Close note">
-                    Close
-                  </button>
-                </div>
-              </div>
-
-              {note?.audioUrl ? (
-                <div className="note-audio">
-                  <audio controls preload="none">
-                    <source src={note.audioUrl} />
-                  </audio>
-                </div>
-              ) : null}
-
-              {headings.length > 0 ? (
-                <div className="note-toc-mobile">
-                  <button
-                    type="button"
-                    className="note-button focus-ring"
-                    aria-expanded={tocOpen}
-                    onClick={() => setTocOpen((prev) => !prev)}
-                  >
-                    Contents
-                  </button>
-                  {tocOpen ? (
-                    <div className="note-toc-list">
-                      {headings.map((heading) => (
-                        <button
-                          key={heading.id}
-                          type="button"
-                          className={`note-toc-link level-${heading.level}`}
-                          onClick={() => {
-                            const el = document.getElementById(heading.id);
-                            if (el) {
-                              el.scrollIntoView({ behavior: "smooth", block: "start" });
-                            }
-                          }}
-                        >
-                          {heading.text}
-                        </button>
-                      ))}
-                    </div>
-                  ) : null}
-                </div>
-              ) : null}
-
-              <div className="note-drawer-body">
-                {headings.length > 0 ? (
-                  <aside className="note-toc">
-                    <div className="note-toc-title">Contents</div>
-                    <div className="note-toc-list">
-                      {headings.map((heading) => (
-                        <button
-                          key={heading.id}
-                          type="button"
-                          className={`note-toc-link level-${heading.level}`}
-                          onClick={() => {
-                            const el = document.getElementById(heading.id);
-                            if (el) {
-                              el.scrollIntoView({ behavior: "smooth", block: "start" });
-                            }
-                          }}
-                        >
-                          {heading.text}
-                        </button>
-                      ))}
-                    </div>
-                  </aside>
-                ) : null}
-
-                <div className="note-content">
-                  {note && note === noteFallback ? (
-                    <div className="note-empty">Note not found.</div>
-                  ) : blocks.length > 0 ? (
-                    renderMarkdownBlocks(blocks)
-                  ) : (
-                    <div className="note-empty">Content pending.</div>
-                  )}
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      ) : null}
+      <Suspense fallback={null}>
+        <NoteDrawer />
+      </Suspense>
     </>
   );
 }
